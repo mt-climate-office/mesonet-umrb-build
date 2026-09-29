@@ -44,7 +44,7 @@ as an orphan station with an explicit "no drawn cell" note.
 Pushing `main` **is a production deploy, on two URLs**: GitHub Pages publishes
 the repo root from `main`, and the same page is reverse-proxied at
 `mesonet.climate.umt.edu/umrb/` (mesonet_app Caddyfile on the legacy host;
-`pages_apps` in mesonet-edge terraform on the CloudFront host). The old
+`pages_apps` in mesonet-gateway terraform on the CloudFront host). The old
 `/api/v2/map/status/` path 301s here from the mesonet-db-rds API, and the
 mco-website UMRB page iframes this URL.
 
