@@ -1,0 +1,1628 @@
+/* ==========================================================================
+   UMRB Build Status — application code.
+
+   Classic script, NOT a module: the kit ships mco-core.js / mco-map.js as
+   plain globals (MCO, MCO.map), and a classic script keeps this file in the
+   same execution mode. Loaded at the end of <body>, after MapLibre and the
+   kit, so the DOM and every global it needs are already there.
+
+   Extracted from the inline <script type="module"> during the mco-web-style
+   migration (kit @0.6.0) — an external file is what lets the page ship a
+   meta CSP without 'unsafe-inline'.
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  // ── Constants ────────────────────────────────────────────────────────────
+  // Absolute: this page is a static GitHub Pages site (proxied at
+  // mesonet.climate.umt.edu/umrb/), so the API is always cross-origin. The
+  // status feed is a live AirTable read that only the mesonet-db-rds API
+  // serves; it answers with CORS `*`. The host must also appear in the meta
+  // CSP connect-src in index.html.
+  const API_BASE   = 'https://mesonet2.climate.umt.edu/api/v2';
+  const STATUS_URL = `${API_BASE}/stations/status/live?type=json`;
+  const DASH_URL   = (s) => `https://mesonet.climate.umt.edu/dash/${encodeURIComponent(s)}`;
+  const GRIDS_URL  = 'data/mt_grids_simple.geojson';
+  const STATE_URL  = 'data/mt_state_simple.geojson';
+
+  // Initial fit (a touch padded around Montana's actual extent). Snapback on
+  // zoom-out uses these same bounds — matching the maintenance map.
+  // The Montana extent and its fit options are kit defaults
+  // (MCO.map.MT_FIT_BOUNDS / MCO.map.FIT_OPTS); aliased here for the few direct
+  // fitBounds/cameraForBounds calls below rather than redeclared.
+  const MT_FIT_BOUNDS = MCO.map.MT_FIT_BOUNDS;
+  const FIT_OPTS      = MCO.map.FIT_OPTS;
+
+  const SEARCH_FLY_ZOOM  = 9;      // zoom when search/deep-link flies to a cell
+  const SEARCH_FLY_SPEED = 1.4;
+  const CELL_LABEL_MINZOOM    = 6; // grid cell IDs
+  const OVERLAY_LABEL_MINZOOM = 8; // county / watershed / reservation names
+
+  const NULL_COLOR = '#9aa3b3';
+
+  // Cells are drawn as partially-transparent fills, so what you see is the
+  // category color composited over the basemap. Both numbers are needed in JS
+  // (not just CSS) so the legend can show the composited color rather than the
+  // raw one. The fills sit *beneath* the basemap's own label layers (see
+  // firstSymbolLayerId), which is what lets the alpha run this high without
+  // burying the town and river names.
+  const FILL_OPACITY = { dark: 0.78, light: 0.78 };
+  // Flat stand-in for the CARTO Dark Matter / Positron land color.
+  const BASEMAP_BG   = { dark: '#0e1116', light: '#fbfaf8' };
+
+  // Cells whose station is installed and maintained by NDAWN rather than the
+  // Mesonet. They carry no row in the station registry, so they are matched by
+  // cell ID and shown as operational with their own popup note.
+  const NDAWN_CELLS = new Set(['S-2', 'R-2', 'S-3', 'S-4']);
+
+  // ── The buildout ramp ────────────────────────────────────────────────────
+  // These categories are not seven unrelated things — they are one ordered
+  // progression, from a cell nobody has claimed to a station that is running:
+  //
+  //   available → pending 2027 → install 2026 → contracted
+  //             → ground game → structure → operational
+  //
+  // So they get one ramp rather than seven hand-picked hues: Fabio Crameri's
+  // `roma`, from the Scientific colour maps, sampled at seven even positions.
+  // roma is perceptually uniform (adjacent steps differ by an equal, visible
+  // amount), readable in grayscale, and CVD-tested by construction — worst-case
+  // pairwise ΔE in CAM02-UCS is 14.6 (light) / 16.0 (dark) under simulated
+  // deuteranopia, protanopia and tritanopia. For comparison a rainbow scores
+  // ~3, and viridis over these same seven stages scored ~7.
+  //   Crameri, F. (2018). Scientific colour maps. doi:10.5281/zenodo.1243862
+  //
+  // roma diverges from dark red-brown through a pale middle to deep blue, which
+  // suits the data: the two ends are the terminal states (nobody has claimed
+  // this cell / a station is running) and the pale, most salient middle is the
+  // work actually in flight. Running it in this direction also keeps the old
+  // Leaflet map's strongest cue — an unclaimed cell still reads red.
+  //
+  // A diverging ramp is the one shape that fights a two-theme map: its pale
+  // middle sinks into Positron and its dark ends sink into Dark Matter. Sliding
+  // the sampled span per theme (what a sequential ramp would do) cannot fix
+  // that, so instead both themes take the SAME seven hues with their CAM02-UCS
+  // lightness remapped into a band that clears a contrast floor against that
+  // theme's basemap. Hue, chroma and the diverging shape survive; only the
+  // lightness envelope moves.
+  //
+  //   light: J' ∈ [20, 76]      dark: J' ∈ [34, 90]
+  //
+  // The public view merges the two construction milestones into one bucket, so
+  // its "Build in progress" is sampled at the MIDPOINT of the two internal
+  // stages it covers, then put through the same lightness remap. That is what
+  // keeps the two views legible against each other: the public band sits
+  // exactly where its two halves came from, rather than being a seventh
+  // unrelated color.
+  const VIEWS = {
+    public: {
+      cats: [
+        { key: 'active',       light: '#001e8d', dark: '#1b47aa', label: 'Operational' },
+        { key: 'building',     light: '#0481ab', dark: '#44a5d0', label: 'Build in progress' },
+        { key: 'contracted',   light: '#97c09b', dark: '#c0ebc4', label: 'Installation pending' },
+        { key: 'candidate-26', light: '#a69338', dark: '#ceb95a', label: 'Install 2026' },
+        { key: 'candidate-27', light: '#8b5308', dark: '#b2742a', label: 'Pending 2027' },
+        { key: 'unassigned',   light: '#690500', dark: '#95290d', label: 'Available cell' },
+      ],
+    },
+    internal: {
+      cats: [
+        { key: 'active',       light: '#001e8d', dark: '#1b47aa', label: 'Operational' },
+        { key: 'structures',   light: '#0065a1', dark: '#3887c5', label: 'Station structure complete' },
+        { key: 'ground',       light: '#37a0b2', dark: '#64c7d9', label: 'Ground game complete' },
+        { key: 'contracted',   light: '#97c09b', dark: '#c0ebc4', label: 'Installation pending' },
+        { key: 'candidate-26', light: '#a69338', dark: '#ceb95a', label: 'Install 2026' },
+        { key: 'candidate-27', light: '#8b5308', dark: '#b2742a', label: 'Pending 2027' },
+        { key: 'unassigned',   light: '#690500', dark: '#95290d', label: 'Available cell' },
+      ],
+    },
+  };
+  const VIEW_NAMES = Object.keys(VIEWS);
+
+  // Registry `status` → category key. Everything not listed (inactive,
+  // decommissioned, pending, or no station at all) falls through to
+  // 'unassigned', i.e. the cell is available — same rule as the Leaflet map.
+  function categoryFor(status, view) {
+    switch (status) {
+      case 'active':       return 'active';
+      case 'contracted':   return 'contracted';
+      case 'ground':       return view === 'internal' ? 'ground'     : 'building';
+      case 'structures':   return view === 'internal' ? 'structures' : 'building';
+      case 'candidate-26': return 'candidate-26';
+      case 'candidate-27': return 'candidate-27';
+      default:             return 'unassigned';
+    }
+  }
+
+  // Reference overlays. Streamed from the MCO data service as FlatGeobuf only
+  // when their chip is switched on, then cached in memory for the session.
+  const OVERLAYS = [
+    { key: 'tribal',   label: 'Tribal lands', url: 'https://data.climate.umt.edu/mesonet/fgb/mt_tribes.fgb' },
+    { key: 'counties', label: 'Counties',     url: 'https://data.climate.umt.edu/mesonet/fgb/mt_counties.fgb' },
+    { key: 'hucs',     label: 'Watersheds',   url: 'https://data.climate.umt.edu/mesonet/fgb/mt_hucs.fgb' },
+  ];
+  const OVERLAY_BY_KEY = new Map(OVERLAYS.map(o => [o.key, o]));
+
+  // ── DOM refs ─────────────────────────────────────────────────────────────
+  const refreshStampEl = document.getElementById('refresh-stamp');
+  const layerFiltersEl = document.getElementById('layer-filters');
+  const legendRowsEl   = document.getElementById('legend-rows');
+  const searchInput    = document.getElementById('search-input');
+  const searchDropdown = document.getElementById('search-dropdown');
+  const infoModal      = document.getElementById('info-modal');
+  const dataBannerEl   = document.getElementById('data-banner');
+  const brandFlagEl    = document.getElementById('brand-flag');
+
+  // Push a sentence to the aria-live region so screen-reader users hear what a
+  // popup opened via click, search, or deep-link contains.
+  const srAnnounceEl = document.getElementById('sr-announce');
+  function announceCell(cellId) {
+    const c = cellById.get(cellId);
+    if (!c || !srAnnounceEl) return;
+    const label = catLabel(c.cat);
+    const s = c.stationId ? stationById.get(c.stationId) : null;
+    srAnnounceEl.textContent = s
+      ? `Cell ${cellId}, ${label}, ${s.name}.`
+      : `Cell ${cellId}, ${label}.`;
+  }
+  // Same, for a popup opened on a station dot rather than a cell.
+  function announceStation(stationId) {
+    const s = stationById.get(stationId);
+    if (!s || !srAnnounceEl) return;
+    const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
+    const known = cell ? cellById.get(cell) : null;
+    const label = catLabel(known ? known.cat : categoryFor(s.status, activeView));
+    srAnnounceEl.textContent = known
+      ? `${s.name || s.station}, ${label}, cell ${cell}.`
+      : `${s.name || s.station}, ${label}, no cell in this grid.`;
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    // Parse as a local calendar date; the registry stores plain YYYY-MM-DD, and
+    // `new Date('2024-05-01')` would otherwise be read as UTC midnight and slip
+    // a day west of Greenwich.
+    const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number);
+    if (!y || !m || !d) return '—';
+    return new Date(y, m - 1, d)
+      .toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' });
+  }
+  function refreshStamp() {
+    // Mountain Time, not viewer-local. This is an operations map for a Montana
+    // network: "loaded 14:05" has to mean the same clock to a field tech in
+    // Bozeman and a collaborator in DC (HOUSE-STYLE § time).
+    refreshStampEl.textContent = `loaded ${MCO.hhmmNowMT()} MT`;
+  }
+
+  // ── Theme ────────────────────────────────────────────────────────────────
+  // High-contrast is a dark-family theme, so this tests `!== 'light'` rather
+  // than `=== 'dark'`. The old `=== 'dark'` form is exactly what dropped a
+  // high-contrast viewer onto the light basemap; MCO.map.cartoStyleUrl() now
+  // owns that decision.
+  const isDark = () => MCO.getTheme() !== 'light';
+
+  MCO.initThemeToggle({
+    button:   document.getElementById('btn-theme'),
+    iconSun:  document.getElementById('icon-sun'),
+    iconMoon: document.getElementById('icon-moon'),
+    onChange: () => {
+      map.setStyle(MCO.map.cartoStyleUrl());
+      map.once('style.load', () => {
+        addCustomLayers();   // re-add — setStyle wipes our sources/layers
+                             // (it also re-adds the active overlays)
+        rebuildCells();      // repopulate the now-empty cells source
+        // Swatch and pill colors are composited against the basemap, so they have
+        // to be regenerated rather than just left alone.
+        renderLegend();
+        if (_popup && _selectedCell) _popup.setHTML(popupHTML(_selectedCell));
+      });
+      pushState();
+    },
+  });
+
+  // ── Info modal ───────────────────────────────────────────────────────────
+  // The kit owns backdrop-click, [data-close-modal] delegation, and
+  // opener-captured focus restore.
+  const btnInfo = document.getElementById('btn-info');
+  const infoModalCtl = MCO.initInfoModal({ dialog: infoModal, trigger: btnInfo });
+
+  // Mark the intro seen AT OPEN, not on close. Someone who reads the modal and
+  // then navigates away without closing it has still seen it; the old
+  // close-handler version re-opened the intro for that visitor every single
+  // visit.
+  const markIntroSeen = () => MCO.lsSet('mco-status-seen-intro', '1');
+  btnInfo.addEventListener('click', markIntroSeen);
+
+  // First-visit auto-open: show the help on load so a new visitor knows what
+  // the colors mean. A deep link means the visitor was sent to something
+  // specific — don't bury it under the intro.
+  const _bootParams = MCO.urlParams();
+  const _isDeepLink = ['cell', 'station', 'lng', 'lat', 'zoom']
+    .some((k) => _bootParams.has(k));
+  if (!MCO.lsGet('mco-status-seen-intro') && !_isDeepLink) {
+    // Defer one tick so the page is rendered before the dialog steals focus.
+    setTimeout(() => {
+      if (!infoModal.open) { infoModalCtl.open(); markIntroSeen(); }
+    }, 350);
+  }
+
+  // ── State ────────────────────────────────────────────────────────────────
+  let stations    = [];            // raw /stations/status/live response
+  let stationById = new Map();     // station slug → registry row
+  let cellById    = new Map();     // cell ID → { cat, stationId, center }
+  let dataUnavailable = false;     // true if the status fetch failed/empty
+  let _gridsFC  = null;            // raw grid geometry, fetched once
+  let _stateFC  = null;
+  let _mapReady = false;
+  let _popup = null;
+
+  async function preloadOverlay(sourceId, url, save) {
+    try {
+      const fc = await MCO.fetchJSON(url);
+      save(fc);
+      // If the source still has the URL data (initial load), swap to the
+      // in-memory copy so subsequent re-adds don't refetch.
+      const src = map.getSource(sourceId);
+      if (src) src.setData(fc);
+    } catch { /* the state outline is decorative — silent failure is fine */ }
+  }
+
+  // ── URL state ────────────────────────────────────────────────────────────
+  // URL params take precedence over localStorage take precedence over defaults.
+  // All enum-string values are matched case-insensitively. Lists may be separated
+  // by spaces (which '+' decodes to via URLSearchParams), commas, or both.
+  // Read once at boot. getLower / splitTokens are the kit's — this file used to
+  // carry byte-identical copies of both.
+  const urlParams = MCO.urlParams();
+  const getLower = (key) => MCO.getParamLower(key, urlParams);
+  const splitTokens = MCO.splitTokens;
+
+  // Internal view. Historically toggled by a bare `?internal=1`; that keeps
+  // working, and `?view=internal` is accepted too. Deliberately has no button:
+  // the extra construction milestones it exposes are pre-announcement detail,
+  // so you reach this view by knowing the URL. Not persisted to localStorage —
+  // a shared machine should never stay in it.
+  const activeView = (() => {
+    if (getLower('view') === 'internal') return 'internal';
+    const raw = getLower('internal');
+    if (raw != null && !['', '0', 'false', 'no', 'off'].includes(raw)) return 'internal';
+    return 'public';
+  })();
+  brandFlagEl.hidden = activeView !== 'internal';
+
+  // ?kbd=off disables the single-character '/' shortcut (WCAG 2.1.4 — a
+  // speech-input user can misfire it just by dictating a sentence). Read up
+  // here with the rest of the URL state, not down in the keyboard section:
+  // pushState() emits it and can run during init, which would put a late
+  // `const` in its temporal dead zone.
+  const kbdShortcuts = getLower('kbd') !== 'off';
+
+  const _initLng    = parseFloat(urlParams.get('lng'));
+  const _initLat    = parseFloat(urlParams.get('lat'));
+  const _initZoom   = parseFloat(urlParams.get('zoom'));
+  const _hasInitPos = Number.isFinite(_initLng) && Number.isFinite(_initLat) && Number.isFinite(_initZoom);
+  // Station IDs in the API are lowercase; cell IDs are uppercase (H-8).
+  const _initStation = getLower('station');
+  const _initCell    = urlParams.get('cell') ? normalizeCell(urlParams.get('cell')) : null;
+
+  // ── Legend category visibility (Plotly-style toggles) ────────────────────
+  // Each view has its own visible-category set. Missing URL param = all visible.
+  // The URL param name for a view's cat set is `cat-<view>` (e.g. cat-public).
+  const catParamKey = (view) => `cat-${view}`;
+  function allCatKeys(view) { return VIEWS[view].cats.map(c => c.key); }
+  function parseCatSet(view) {
+    const allKeys = allCatKeys(view);
+    const tokens = splitTokens(urlParams.get(catParamKey(view)));
+    if (tokens === null) return new Set(allKeys);
+    // Case-insensitive match against the view's keys.
+    const lowerToKey = new Map(allKeys.map(k => [k.toLowerCase(), k]));
+    const set = new Set(tokens.map(t => lowerToKey.get(t)).filter(Boolean));
+    return set.size ? set : new Set();   // an explicit empty list = nothing visible
+  }
+  const visibleCatsByView = {};
+  for (const view of VIEW_NAMES) visibleCatsByView[view] = parseCatSet(view);
+  function currentCats()    { return visibleCatsByView[activeView]; }
+  function currentAllCats() { return allCatKeys(activeView); }
+  const catByKey = (key) => VIEWS[activeView].cats.find(c => c.key === key) || null;
+  function catLabel(key) {
+    const c = catByKey(key);
+    return c ? c.label : key;
+  }
+  // Every category carries both theme variants — see the VIEWS comment for why
+  // the two themes sample different spans of the same ramp.
+  function catColor(key) {
+    const c = catByKey(key);
+    if (!c) return NULL_COLOR;
+    return isDark() ? c.dark : c.light;
+  }
+
+  // ── Color math (legend swatches) ─────────────────────────────────────────
+  const parseHex = (h) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const toHex    = (c) => '#' + c.map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+  const relLum   = (c) => {
+    const s = c.map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * s[0] + 0.7152 * s[1] + 0.0722 * s[2];
+  };
+  // The color a cell actually appears as: the category color alpha-composited
+  // over the basemap, exactly as MapLibre draws it. Used for legend swatches so
+  // the chip reads as the same color as the cells it controls.
+  function swatchColor(key) {
+    const theme = isDark() ? 'dark' : 'light';
+    const a  = FILL_OPACITY[theme];
+    const bg = parseHex(BASEMAP_BG[theme]);
+    const c  = parseHex(catColor(key));
+    return toHex(c.map((v, i) => v * a + bg[i] * (1 - a)));
+  }
+  // Pills are solid, so their label has to flip between light and dark text
+  // depending on the fill — white on the amber "build in progress" is 1.75:1.
+  // Picking whichever has more contrast clears WCAG AA for every color in the
+  // palette (worst case 4.54:1).
+  function readableOn(hex) {
+    const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    const l = relLum(parseHex(hex));
+    return ratio(l, relLum([255, 255, 255])) >= ratio(l, relLum([26, 26, 46]))
+      ? '#ffffff' : '#1a1a2e';
+  }
+
+  // ── Layer toggles (station dots + reference overlays) ─────────────────────
+  let stationsOn = (() => {
+    const u = getLower('stations');
+    if (u === 'on' || u === 'off') return u === 'on';
+    const saved = MCO.lsGet('mco-status-stations');
+    return saved == null ? true : saved === 'on';   // dots are on by default
+  })();
+  const activeOverlays = (() => {
+    const tokens = splitTokens(urlParams.get('overlays'));
+    if (tokens !== null) return new Set(tokens.filter(t => OVERLAY_BY_KEY.has(t)));
+    try {
+      const saved = JSON.parse(MCO.lsGet('mco-status-overlays') || 'null');
+      if (Array.isArray(saved)) return new Set(saved.filter(t => OVERLAY_BY_KEY.has(t)));
+    } catch {}
+    return new Set();
+  })();
+
+  let _selectedCell = _initCell;
+  // A station popup and a cell popup are mutually exclusive — only one popup
+  // exists at a time, and each owns its own URL parameter.
+  let _selectedStation = null;
+
+  // Grid cells are labelled LETTER-NUMBER with no zero padding (H-8), but the
+  // registry sometimes carries a padded form (H-08). Normalize to the map's
+  // spelling — same rule the Leaflet map applied inline.
+  function normalizeCell(raw) {
+    return String(raw).trim().toUpperCase().replace(/-0+(\d)/, '-$1');
+  }
+
+  // ── Map init ─────────────────────────────────────────────────────────────
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: MCO.map.cartoStyleUrl(),
+    ...MCO.map.initialCamera(urlParams),
+  });
+  MCO.map.addNavigation(map);                 // zoom buttons, no compass
+  MCO.map.addFitControl(map);
+
+  function emptyFC() { return { type: 'FeatureCollection', features: [] }; }
+
+  function addCustomLayers() {
+    if (!map.getSource('cells'))    map.addSource('cells',    { type: 'geojson', data: emptyFC() });
+    if (!map.getSource('stations')) map.addSource('stations', { type: 'geojson', data: emptyFC() });
+    if (!map.getSource('state')) {
+      map.addSource('state', { type: 'geojson', data: _stateFC || STATE_URL });
+    }
+    if (!_stateFC) preloadOverlay('state', STATE_URL, fc => _stateFC = fc);
+
+    // Themed live-shaded topography, underneath everything we draw. The UMRB
+    // cells run at 0.78 alpha, so relief reads through the fills and across the
+    // gaps between them — which is most of what orients an eastern-Montana
+    // extent that has few basemap labels.
+    MCO.map.addHillshade(map);
+
+    // CARTO draws its own dashed county boundaries (pale orange on Positron,
+    // z9+). We draw counties as a toggleable overlay, so the basemap's copy is
+    // a duplicate that can't be turned off — hide it. Re-run on every style
+    // load, because setStyle brings it back.
+    if (map.getLayer('boundary_county')) {
+      map.setLayoutProperty('boundary_county', 'visibility', 'none');
+    }
+
+    // Everything from here to 'state-line' goes beneath the basemap's labels.
+    const belowLabels = MCO.map.firstSymbolLayerId(map);
+
+    // Grid cells are the subject of this map, so they sit at the bottom of our
+    // stack and everything else reads on top of them.
+    if (!map.getLayer('cells-fill')) {
+      map.addLayer({ id: 'cells-fill', type: 'fill', source: 'cells', paint: cellFillPaint() },
+                   belowLabels);
+    }
+    if (!map.getLayer('cells-line')) {
+      map.addLayer({
+        id: 'cells-line', type: 'line', source: 'cells',
+        layout: { 'line-join': 'round' },
+        paint: cellLinePaint(),
+      }, belowLabels);
+    }
+
+    // Montana state boundary — heavier line so the state shape reads as the
+    // dominant frame. No fill (the basemap already provides context).
+    if (!map.getLayer('state-line')) {
+      map.addLayer({
+        id: 'state-line', type: 'line', source: 'state',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: stateLinePaint(),
+      }, belowLabels);
+    }
+
+    // Reference overlays live between the grid and the state outline; their
+    // sources/layers are created lazily by loadOverlay() and inserted beneath
+    // 'state-line', so it has to exist first.
+    reapplyOverlays();
+
+    if (!map.getLayer('cells-label')) {
+      map.addLayer({
+        id: 'cells-label', type: 'symbol', source: 'cells',
+        minzoom: CELL_LABEL_MINZOOM,
+        layout: cellLabelLayout(),
+        paint: cellLabelPaint(),
+      });
+    }
+
+    // Station dots last so they always win against fills and outlines.
+    if (!map.getLayer('stations-layer')) {
+      map.addLayer({ id: 'stations-layer', type: 'circle', source: 'stations', paint: stationPaint() });
+    }
+
+    applyAllFilters();
+    applyLabelsVisibility();
+    applyStationsVisibility();
+  }
+
+  // ── Paint expression generators ──────────────────────────────────────────
+  // Simple match on the cell category → the active view's category colors.
+  function paintColorForView() {
+    const expr = ['match', ['get', 'cat']];
+    for (const c of VIEWS[activeView].cats) expr.push(c.key, catColor(c.key));
+    expr.push(NULL_COLOR);   // fallback
+    return expr;
+  }
+
+  function cellFillPaint() {
+    return {
+      'fill-color': paintColorForView(),
+      // Slightly hotter in dark mode: the same alpha over a dark basemap reads
+      // considerably duller than it does over Positron.
+      'fill-opacity': FILL_OPACITY[isDark() ? 'dark' : 'light'],
+    };
+  }
+  function cellLinePaint() {
+    return {
+      'line-color':   isDark() ? '#0d1117' : '#1a1a2e',
+      'line-width':   0.8,
+      'line-opacity': isDark() ? 0.55 : 0.45,
+    };
+  }
+  function cellLabelLayout() {
+    return {
+      'text-field': ['get', 'cell'],
+      'text-font':  ['Open Sans Regular', 'Arial Unicode MS Regular'],
+      'text-size':  ['interpolate', ['linear'], ['zoom'], 6, 9, 10, 12, 14, 14],
+      'text-padding': 2,
+      'text-allow-overlap': false,
+      'text-optional': true,
+    };
+  }
+  function cellLabelPaint() {
+    return {
+      'text-color':      isDark() ? '#e8ecf0' : '#1a1a2e',
+      'text-halo-color': isDark() ? '#161b22' : '#ffffff',
+      'text-halo-width': 1.4,
+      'text-halo-blur':  0.4,
+    };
+  }
+  // The dot marks *where* a station is; the cell behind it carries the status.
+  // So it is deliberately achromatic — any hue would either duplicate the ramp
+  // or, if warm, collide with the ramp's yellow end under deuteranopia (ΔE ~3).
+  // Pure lightness contrast separates it from every category for every kind of
+  // color vision (worst case ΔE 26).
+  function stationPaint() {
+    return {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 2.5, 7, 4, 10, 6, 14, 8],
+      'circle-color':        isDark() ? '#ffffff' : '#0f1115',
+      'circle-stroke-color': isDark() ? '#0e1116' : '#ffffff',
+      'circle-stroke-width': 1.2,
+      'circle-opacity': 0.95,
+    };
+  }
+  // The state outline is the kit's shared boundary treatment, not app data —
+  // same neutral line every MCO map draws Montana with.
+  function stateLinePaint() { return MCO.map.overlayPaints().stateLine; }
+  // County and watershed boundaries are context, not data: one muted line,
+  // now off the kit's --text-muted token rather than a hardcoded pair.
+  // Tribal lands are the exception — see overlayPaintsFor().
+  function overlayLinePaint() { return MCO.map.overlayPaints().countiesLine; }
+  function overlayLabelPaint() {
+    return {
+      'text-color':      isDark() ? '#9aa3b3' : '#4a5262',
+      'text-halo-color': isDark() ? '#161b22' : '#ffffff',
+      'text-halo-width': 1.4,
+      'text-halo-blur':  0.3,
+    };
+  }
+
+  // Theme changes go through map.setStyle(), which wipes every custom layer;
+  // addCustomLayers() then rebuilds them and each paint generator above reads
+  // the new theme. So there is deliberately no in-place repaint path here.
+
+  // ── Data fetch ───────────────────────────────────────────────────────────
+  // Grid geometry ships with the page and never changes within a session, so it
+  // is fetched once; station status is re-read on every Refresh.
+  function fetchStatus() {
+    return MCO.fetchJSON(STATUS_URL, { cache: 'no-store' });
+  }
+
+  async function loadAll() {
+    try {
+      const [grids, status] = await Promise.all([
+        _gridsFC ? Promise.resolve(_gridsFC) : MCO.fetchJSON(GRIDS_URL),
+        fetchStatus().catch(() => null),
+      ]);
+      _gridsFC = grids;
+
+      const rows = Array.isArray(status) ? status : [];
+      dataUnavailable = rows.length === 0;
+      stations = rows;
+      dataBannerEl.hidden = !dataUnavailable;
+
+      indexData();
+      populateSearch();
+      rebuildCells();
+      applyAllFilters();
+      renderLegend();
+      refreshStamp();
+
+      // Deep-link from ?cell=… / ?station=… . loadAll() only runs after the
+      // map's 'load' handler, so the layers always exist by this point.
+      // ?station= opens the station itself; ?cell= opens the cell. Resolving a
+      // station down to its cell (the old behaviour) lost the distinction and
+      // dropped any station whose ace_grid is not in the drawn grid.
+      if (!_deepLinkConsumed && _initStation && stationById.has(_initStation)) {
+        _deepLinkConsumed = true;
+        if (_hasInitPos) openStationPopup(_initStation);
+        else             flyToStation(_initStation);
+      } else if (!_deepLinkConsumed && _initCell && cellById.has(_initCell)) {
+        _deepLinkConsumed = true;
+        if (_hasInitPos) openPopupFor(_initCell);
+        else             flyToCell(_initCell);
+      } else {
+        // Push initial URL so it's clean even if the user hasn't interacted yet
+        pushState();
+      }
+    } catch (err) {
+      console.error(err);
+      dataUnavailable = true;
+      dataBannerEl.hidden = false;
+      MCO.showToast(`Error loading data: ${err.message}`);
+      // Still render whatever we have — an unshaded grid is better than nothing.
+      indexData();
+      populateSearch();
+      rebuildCells();
+      applyAllFilters();
+      renderLegend();
+    }
+  }
+  // Only consume the deep link once (initial load); Refresh shouldn't refly.
+  let _deepLinkConsumed = false;
+
+  // Build the station lookup and the cell → status join in one pass.
+  function indexData() {
+    stationById.clear();
+    cellById.clear();
+
+    // Station registry, keyed by slug. Rows without usable coordinates are kept
+    // (they can still own a cell) but never get a dot.
+    for (const s of stations) {
+      if (!s || !s.station) continue;
+      const lat = Number(s.latitude), lon = Number(s.longitude);
+      s.latitude  = Number.isFinite(lat) ? lat : null;
+      s.longitude = Number.isFinite(lon) ? lon : null;
+      stationById.set(s.station, s);
+    }
+
+    // Cell → first station claiming it. First-claim-wins matches the Leaflet
+    // map's Array.find(); a cell double-booked in the registry is a data issue
+    // to fix upstream rather than something to guess at here.
+    const stationByCell = new Map();
+    for (const s of stations) {
+      if (!s || !s.ace_grid) continue;
+      const key = normalizeCell(s.ace_grid);
+      if (!stationByCell.has(key)) stationByCell.set(key, s);
+    }
+
+    for (const f of (_gridsFC ? _gridsFC.features : [])) {
+      const cell = normalizeCell(f.properties.Cell);
+      const s = stationByCell.get(cell) || null;
+      const ndawn = !s && NDAWN_CELLS.has(cell);
+      cellById.set(cell, {
+        cell,
+        stationId: s ? s.station : null,
+        // An NDAWN cell has a station on the ground, just not one of ours.
+        cat: ndawn ? 'active' : categoryFor(s && s.status, activeView),
+        ndawn,
+        center: featureCenter(f),
+      });
+    }
+  }
+
+  // Cheap representative point: the centroid of the feature's bounding box.
+  // Grid cells are near-rectangular, so this lands inside the cell and is all
+  // flyTo / popup anchoring needs.
+  function featureCenter(f) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const walk = (a) => {
+      if (typeof a[0] === 'number') {
+        if (a[0] < minX) minX = a[0];
+        if (a[0] > maxX) maxX = a[0];
+        if (a[1] < minY) minY = a[1];
+        if (a[1] > maxY) maxY = a[1];
+        return;
+      }
+      for (const el of a) walk(el);
+    };
+    walk(f.geometry.coordinates);
+    return [(minX + maxX) / 2, (minY + maxY) / 2];
+  }
+
+  function rebuildCells() {
+    if (!map.getSource('cells') || !_gridsFC) return;
+
+    const cellFeatures = _gridsFC.features.map(f => {
+      const cell = normalizeCell(f.properties.Cell);
+      const c = cellById.get(cell);
+      return {
+        type: 'Feature',
+        geometry: f.geometry,
+        properties: { cell, cat: c ? c.cat : 'unassigned' },
+      };
+    });
+    map.getSource('cells').setData({ type: 'FeatureCollection', features: cellFeatures });
+
+    // Station dots. Parity with the Leaflet map: decommissioned stations and
+    // rows with no cell assignment are omitted, so the dots always correspond
+    // to the buildout the grid is describing.
+    const stationFeatures = [];
+    for (const s of stations) {
+      if (!s || s.status === 'decommissioned' || !s.ace_grid) continue;
+      if (s.longitude == null || s.latitude == null) continue;
+      stationFeatures.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [s.longitude, s.latitude] },
+        properties: {
+          station: s.station,
+          name:    s.name || s.station,
+          cell:    normalizeCell(s.ace_grid),
+          cat:     categoryFor(s.status, activeView),
+        },
+      });
+    }
+    map.getSource('stations').setData({ type: 'FeatureCollection', features: stationFeatures });
+
+    rebuildSrTable(cellFeatures);
+  }
+
+  // Screen-reader twin of the canvas. WebGL paints to a bitmap that assistive
+  // tech cannot read at all, so without this the map's entire content is
+  // invisible to a non-sighted user (HOUSE-STYLE §5). One row per cell, built
+  // from the same features the map just drew so the two cannot disagree.
+  // Rebuilt silently on every repaint — it is not wired to a live region,
+  // because announcing a 200-row table on each refresh tick would be noise.
+  function rebuildSrTable(cellFeatures) {
+    const tbody = document.getElementById('sr-cell-rows');
+    if (!tbody) return;
+    const rows = cellFeatures
+      .slice()
+      .sort((a, b) => a.properties.cell.localeCompare(b.properties.cell, 'en', { numeric: true }))
+      .map((f) => {
+        const cell = f.properties.cell;
+        const info = cellById.get(cell);
+        const station = info && info.stationId ? stationById.get(info.stationId) : null;
+        const name = station ? (station.name || station.station) : '—';
+        return `<tr><td>${MCO.escapeHTML(cell)}</td>`
+             + `<td>${MCO.escapeHTML(catLabel(f.properties.cat))}</td>`
+             + `<td>${MCO.escapeHTML(name)}</td></tr>`;
+      });
+    tbody.innerHTML = rows.join('');
+  }
+
+  // ── Reference overlays (lazy FlatGeobuf) ─────────────────────────────────
+  const _overlayFC = new Map();     // key → FeatureCollection, cached per session
+  const _overlayLoading = new Set();
+
+  // Stream a .fgb into a FeatureCollection. flatgeobuf.deserialize yields one
+  // GeoJSON feature at a time off the response body.
+  async function fetchOverlay(o) {
+    const res = await fetch(o.url);
+    if (!res.ok) throw new Error(`${o.label} fetch failed (${res.status})`);
+    const features = [];
+    for await (const f of flatgeobuf.deserialize(res.body)) features.push(f);
+    return { type: 'FeatureCollection', features };
+  }
+
+  // Tribal lands carry the house treatment rather than the generic reference
+  // line: a distinct earth-toned fill and outline, and labels shortened from
+  // the Census spelling to common usage ("Blackfeet Indian Reservation" →
+  // "Blackfeet"). Every other MCO map draws them this way, and a reservation
+  // boundary is not the same kind of object as a watershed.
+  function overlayPaintsFor(key) {
+    const kit = MCO.map.overlayPaints();
+    if (key !== 'tribal') {
+      return { line: overlayLinePaint(), label: overlayLabelPaint(), fill: null };
+    }
+    return { line: kit.tribalLine, label: kit.tribalLabelPaint, fill: kit.tribalFill };
+  }
+
+  function addOverlayLayers(key) {
+    const o = OVERLAY_BY_KEY.get(key);
+    const fc = _overlayFC.get(key);
+    if (!o || !fc) return;
+    const srcId = `ov-${key}`;
+    if (!map.getSource(srcId)) map.addSource(srcId, { type: 'geojson', data: fc });
+    // Insert beneath the state outline so Montana's border stays dominant.
+    const before = map.getLayer('state-line') ? 'state-line' : undefined;
+    const paints = overlayPaintsFor(key);
+    if (paints.fill && !map.getLayer(`${srcId}-fill`)) {
+      map.addLayer({
+        id: `${srcId}-fill`, type: 'fill', source: srcId, paint: paints.fill,
+      }, before);
+    }
+    if (!map.getLayer(`${srcId}-line`)) {
+      map.addLayer({
+        id: `${srcId}-line`, type: 'line', source: srcId,
+        layout: { 'line-join': 'round' },
+        paint: paints.line,
+      }, before);
+    }
+    if (!map.getLayer(`${srcId}-label`)) {
+      map.addLayer({
+        id: `${srcId}-label`, type: 'symbol', source: srcId,
+        minzoom: OVERLAY_LABEL_MINZOOM,
+        layout: key === 'tribal' ? MCO.map.TRIBAL_LABEL_LAYOUT : {
+          'text-field': ['coalesce', ['get', 'name'], ['get', 'NAME'], ''],
+          'text-font':  ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+          'text-size':  ['interpolate', ['linear'], ['zoom'], 8, 10, 12, 13],
+          'text-letter-spacing': 0.05,
+          'text-max-width': 8,
+          'text-padding': 2,
+          'text-allow-overlap': false,
+        },
+        paint: paints.label,
+      }, before);
+    }
+  }
+
+  function removeOverlayLayers(key) {
+    const srcId = `ov-${key}`;
+    for (const lid of [`${srcId}-fill`, `${srcId}-line`, `${srcId}-label`]) {
+      if (map.getLayer(lid)) map.removeLayer(lid);
+    }
+    if (map.getSource(srcId)) map.removeSource(srcId);
+  }
+
+  // Re-add every switched-on overlay from the in-memory cache. Called after
+  // setStyle(), which wipes all custom sources and layers.
+  function reapplyOverlays() {
+    for (const key of activeOverlays) {
+      if (_overlayFC.has(key)) addOverlayLayers(key);
+      else loadOverlay(key);
+    }
+  }
+
+  async function loadOverlay(key) {
+    if (_overlayFC.has(key)) { addOverlayLayers(key); return; }
+    if (_overlayLoading.has(key)) return;
+    const o = OVERLAY_BY_KEY.get(key);
+    _overlayLoading.add(key);
+    setChipBusy(key, true);
+    try {
+      _overlayFC.set(key, await fetchOverlay(o));
+      // The user may have switched it back off while it was in flight.
+      if (activeOverlays.has(key)) addOverlayLayers(key);
+    } catch (err) {
+      console.error(err);
+      activeOverlays.delete(key);
+      setChipPressed(key, false);
+      MCO.showToast(`Could not load ${o.label.toLowerCase()}`);
+    } finally {
+      _overlayLoading.delete(key);
+      setChipBusy(key, false);
+    }
+  }
+
+  // ── Layer chip UI ────────────────────────────────────────────────────────
+  function chipEl(key) { return layerFiltersEl.querySelector(`.chip[data-layer="${key}"]`); }
+  function setChipBusy(key, busy) {
+    const el = chipEl(key);
+    if (el) el.setAttribute('aria-busy', busy ? 'true' : 'false');
+  }
+  function setChipPressed(key, on) {
+    const el = chipEl(key);
+    if (el) el.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+
+  function buildLayerChips() {
+    layerFiltersEl.innerHTML = '';
+    const entries = [
+      { key: 'stations', label: 'Stations', pressed: () => stationsOn },
+      ...OVERLAYS.map(o => ({ key: o.key, label: o.label, pressed: () => activeOverlays.has(o.key) })),
+    ];
+    for (const e of entries) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip';
+      chip.dataset.layer = e.key;
+      chip.textContent = e.label;
+      chip.setAttribute('aria-pressed', e.pressed() ? 'true' : 'false');
+      chip.addEventListener('click', () => {
+        const on = chip.getAttribute('aria-pressed') !== 'true';
+        chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (e.key === 'stations') {
+          stationsOn = on;
+          MCO.lsSet('mco-status-stations', on ? 'on' : 'off');
+          applyStationsVisibility();
+        } else {
+          if (on) { activeOverlays.add(e.key); loadOverlay(e.key); }
+          else    { activeOverlays.delete(e.key); removeOverlayLayers(e.key); }
+          MCO.lsSet('mco-status-overlays', JSON.stringify([...activeOverlays]));
+        }
+        pushState();
+      });
+      layerFiltersEl.appendChild(chip);
+    }
+  }
+
+  function applyStationsVisibility() {
+    if (map.getLayer('stations-layer')) {
+      map.setLayoutProperty('stations-layer', 'visibility', stationsOn ? 'visible' : 'none');
+    }
+  }
+
+  // Legend category visibility is the only filter; it applies to the cell fill,
+  // its outline and label, and the station dots sitting inside those cells, so
+  // isolating a status leaves a coherent picture.
+  function applyAllFilters() {
+    if (!map.getLayer('cells-fill')) return;
+    const catMatch = ['in', ['get', 'cat'], ['literal', [...currentCats()]]];
+    for (const lid of ['cells-fill', 'cells-line', 'cells-label', 'stations-layer']) {
+      if (map.getLayer(lid)) map.setFilter(lid, catMatch);
+    }
+    updateEmptyState();
+  }
+
+  // Show a small callout when the filter state hides everything, so the user
+  // knows the empty map is intentional and how to recover.
+  const emptyStateEl = document.getElementById('empty-state');
+  function updateEmptyState() {
+    if (!emptyStateEl || cellById.size === 0) {
+      if (emptyStateEl) emptyStateEl.hidden = true;
+      return;
+    }
+    let msg = null;
+    if (currentCats().size === 0) {
+      msg = '<strong>All legend categories hidden.</strong> Click a legend row to show cells.';
+    } else if (![...cellById.values()].some(c => currentCats().has(c.cat))) {
+      msg = 'No grid cells match the current filters.';
+    }
+    if (msg) {
+      emptyStateEl.innerHTML = `<div class="empty-state-card">${msg}</div>`;
+      emptyStateEl.hidden = false;
+    } else {
+      emptyStateEl.hidden = true;
+    }
+  }
+
+  // ── Search (custom listbox dropdown + flyTo + popup) ─────────────────────
+  // Custom rather than native <datalist> so the popup honors the app theme.
+  let _searchSorted = [];
+  let _activeSearchIndex = -1;
+  const SEARCH_MAX_RESULTS = 8;
+
+  function populateSearch() {
+    _searchSorted = stations
+      .filter(s => s && s.station && s.status !== 'decommissioned')
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
+  function matchScore(s, q) {
+    const n = (s.name || '').toLowerCase();
+    const id = (s.station || '').toLowerCase();
+    const cell = (s.ace_grid || '').toLowerCase();
+    if (n === q || id === q || cell === q) return 0;
+    if (n.startsWith(q))  return 1;
+    if (id.startsWith(q)) return 2;
+    if (cell.startsWith(q)) return 3;
+    if (n.includes(q))    return 4;
+    if (id.includes(q))   return 5;
+    return Infinity;
+  }
+
+  function showSearchDropdown(rawQuery) {
+    const q = rawQuery.trim().toLowerCase();
+    if (!q) { hideSearchDropdown(); return; }
+    const matches = _searchSorted
+      .map(s => ({ s, score: matchScore(s, q) }))
+      .filter(m => m.score < Infinity)
+      .sort((a, b) => a.score - b.score || (a.s.name || '').localeCompare(b.s.name || ''))
+      .slice(0, SEARCH_MAX_RESULTS)
+      .map(m => m.s);
+    searchDropdown.innerHTML = '';
+    if (matches.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.setAttribute('aria-disabled', 'true');
+      li.textContent = `No stations match "${rawQuery.trim()}"`;
+      searchDropdown.appendChild(li);
+      searchDropdown.hidden = false;
+      searchInput.setAttribute('aria-expanded', 'true');
+      _activeSearchIndex = -1;
+      return;
+    }
+    for (const s of matches) {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.dataset.stationId = s.station;
+      li.id = `search-opt-${s.station}`;
+      const name = document.createElement('span');
+      name.className = 'search-name';
+      name.textContent = s.name || s.station;
+      const meta = document.createElement('span');
+      meta.className = 'search-meta';
+      meta.textContent = `${s.station} · ${s.ace_grid ? normalizeCell(s.ace_grid) : 'no cell'}`;
+      li.appendChild(name);
+      li.appendChild(meta);
+      // mousedown (not click) so the option commits before the input's blur.
+      li.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        selectStation(s.station);
+      });
+      searchDropdown.appendChild(li);
+    }
+    searchDropdown.hidden = false;
+    searchInput.setAttribute('aria-expanded', 'true');
+    _activeSearchIndex = -1;
+    searchInput.removeAttribute('aria-activedescendant');
+  }
+
+  function hideSearchDropdown() {
+    searchDropdown.hidden = true;
+    searchInput.setAttribute('aria-expanded', 'false');
+    _activeSearchIndex = -1;
+    searchInput.removeAttribute('aria-activedescendant');
+  }
+
+  function selectStation(stationId) {
+    hideSearchDropdown();
+    searchInput.value = '';
+    searchInput.blur();
+    flyToStation(stationId);
+  }
+
+  // Searching a station lands on the STATION, not on its cell — the two only
+  // differ for a station whose ace_grid names no drawn cell, and that is exactly
+  // the case the old cell-only path dead-ended on with a toast and no popup.
+  function flyToStation(stationId) {
+    const s = stationById.get(stationId);
+    if (!s || s.longitude == null || s.latitude == null) {
+      MCO.showToast(`${(s && (s.name || s.station)) || stationId} has no location`);
+      return;
+    }
+    // A hidden category would fly the user to a blank patch of map — turn it
+    // back on rather than silently landing on nothing.
+    const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
+    const known = cell ? cellById.get(cell) : null;
+    const cat = known ? known.cat : categoryFor(s.status, activeView);
+    if (!currentCats().has(cat)) {
+      currentCats().add(cat);
+      refreshLegendVisuals();
+      applyAllFilters();
+    }
+    map.flyTo({
+      center: [s.longitude, s.latitude], zoom: SEARCH_FLY_ZOOM,
+      speed: SEARCH_FLY_SPEED, animate: !MCO.reducedMotion(),
+    });
+    map.once('moveend', () => openStationPopup(stationId));
+  }
+
+  function setActiveSearchItem(idx) {
+    const items = searchDropdown.querySelectorAll('li');
+    if (!items.length) return;
+    if (idx < 0)             idx = items.length - 1;
+    if (idx >= items.length) idx = 0;
+    _activeSearchIndex = idx;
+    items.forEach((it, i) => it.classList.toggle('active', i === idx));
+    items[idx].scrollIntoView({ block: 'nearest' });
+    searchInput.setAttribute('aria-activedescendant', items[idx].id);
+  }
+
+  searchInput.addEventListener('input', () => showSearchDropdown(searchInput.value));
+  searchInput.addEventListener('focus', () => { if (searchInput.value) showSearchDropdown(searchInput.value); });
+  // Delay so a click/mousedown on an option can fire before we hide the list.
+  searchInput.addEventListener('blur',  () => setTimeout(hideSearchDropdown, 120));
+
+  // Below 640px the field collapses into a disclosure button grouped with the
+  // other nav buttons and reopens as a full-width overlay bar under the navbar.
+  // The kit owns the collapse mechanics only — the combobox above stays ours.
+  const searchCtl = MCO.initSearchCollapse({
+    wrap:    document.getElementById('search-wrap'),
+    toggle:  document.getElementById('btn-search-toggle'),
+    input:   searchInput,
+    onClose: hideSearchDropdown,
+  });
+
+  // With ?kbd=off the '/' shortcut is disabled, so advertising it would be a
+  // lie. (The kit already hides this hint inside the compact overlay bar.)
+  if (!kbdShortcuts) {
+    const kbdHint = document.querySelector('#search-wrap .search-kbd');
+    if (kbdHint) kbdHint.hidden = true;
+  }
+
+  function flyToCell(cellId) {
+    const c = cellById.get(cellId);
+    if (!c) { MCO.showToast('Grid cell not found'); return; }
+    // A hidden category would fly the user to a blank patch of map — turn it
+    // back on rather than silently landing on nothing.
+    if (!currentCats().has(c.cat)) {
+      currentCats().add(c.cat);
+      refreshLegendVisuals();
+      applyAllFilters();
+    }
+    map.flyTo({
+      center: c.center, zoom: SEARCH_FLY_ZOOM,
+      speed: SEARCH_FLY_SPEED, animate: !MCO.reducedMotion(),
+    });
+    map.once('moveend', () => openPopupFor(cellId));
+  }
+
+  // ── Popup ────────────────────────────────────────────────────────────────
+  function popupHTML(cellId) {
+    const c = cellById.get(cellId);
+    if (!c) return '';
+    const color = catColor(c.cat);
+    const pill = `<span class="pop-pill" style="background:${color};color:${readableOn(color)}">${MCO.escapeHTML(catLabel(c.cat))}</span>`;
+    const s = c.stationId ? stationById.get(c.stationId) : null;
+
+    if (c.ndawn) {
+      return `
+        <div class="pop-title">Grid cell ${MCO.escapeHTML(cellId)}</div>
+        ${pill}
+        <div class="pop-note">Station installed and maintained by
+          <a href="https://ndawn.ndsu.nodak.edu/" target="_blank" rel="noopener">NDAWN</a>.</div>
+      `;
+    }
+    if (!s) {
+      return `
+        <div class="pop-title">Grid cell ${MCO.escapeHTML(cellId)}</div>
+        ${pill}
+        <div class="pop-empty">No station assigned to this cell yet.</div>
+      `;
+    }
+
+    // An operational station has a real location and history; everything else
+    // is a proposal, so the location is labelled as such and the install-date /
+    // dashboard rows are omitted (there is nothing to link to yet).
+    const live = c.cat === 'active';
+    const rows = stationFactRows(s, live);
+
+    return `
+      <div class="pop-title">${MCO.escapeHTML(s.name || s.station)}</div>
+      <div class="pop-sub">${MCO.escapeHTML(s.station)} · cell ${MCO.escapeHTML(cellId)}</div>
+      ${pill}
+      <dl class="pop-facts">${rows.join('')}</dl>
+      ${live ? `<div class="pop-links"><a href="${DASH_URL(s.station)}" target="_blank" rel="noopener">Open dashboard →</a></div>` : ''}
+    `;
+  }
+
+  // Shared fact rows for the cell popup above and the station popup below.
+  // `live` means "a real, installed station" — everything else is a proposal,
+  // so the location reads as proposed and there is no install date to show.
+  function stationFactRows(s, live) {
+    const coords = (s.longitude != null && s.latitude != null)
+      ? `${s.longitude.toFixed(4)}, ${s.latitude.toFixed(4)}` : '—';
+    const rows = [];
+    rows.push(`<dt>${live ? 'Location' : 'Proposed'}</dt><dd>${MCO.escapeHTML(coords)}</dd>`);
+    if (live && Number.isFinite(Number(s.elevation))) {
+      rows.push(`<dt>Elevation</dt><dd>${Math.round(Number(s.elevation) * 3.281).toLocaleString()} ft</dd>`);
+    }
+    if (live && s.date_installed) {
+      rows.push(`<dt>Installed</dt><dd>${MCO.escapeHTML(fmtDate(s.date_installed))}</dd>`);
+    }
+    if (s.nwsli_id) rows.push(`<dt>NWSLI</dt><dd>${MCO.escapeHTML(s.nwsli_id)}</dd>`);
+    return rows;
+  }
+
+  // Station-first popup, used when the click lands on a dot rather than a cell.
+  // The cell popup answers "what is happening in this cell"; a dot invites the
+  // question "what is this station", so it gets its own answer. It also works
+  // for a station whose ace_grid names no drawn cell — the cell popup cannot,
+  // because it keys entirely off cellById and simply returns nothing.
+  function stationPopupHTML(stationId) {
+    const s = stationById.get(stationId);
+    if (!s) return '';
+    const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
+    const known = cell ? cellById.get(cell) : null;
+    const cat = known ? known.cat : categoryFor(s.status, activeView);
+    const color = catColor(cat);
+    const pill = `<span class="pop-pill" style="background:${color};color:${readableOn(color)}">${MCO.escapeHTML(catLabel(cat))}</span>`;
+    const live = cat === 'active';
+
+    // A station whose ace_grid names a cell this map does not draw. Say so
+    // rather than leaving a dot floating with no explanation — it means the
+    // station registry and the ACE grid geometry disagree, which is worth
+    // someone noticing rather than silently rendering.
+    const orphan = cell && !known
+      ? `<div class="pop-note"><strong>Cell ${MCO.escapeHTML(cell)}</strong> is not in this map's grid — the station registry and the ACE grid geometry disagree.</div>`
+      : '';
+    const sub = cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`;
+
+    return `
+      <div class="pop-title">${MCO.escapeHTML(s.name || s.station)}</div>
+      <div class="pop-sub">${MCO.escapeHTML(sub)}</div>
+      ${pill}
+      ${orphan}
+      <dl class="pop-facts">${stationFactRows(s, live).join('')}</dl>
+      ${live ? `<div class="pop-links"><a href="${DASH_URL(s.station)}" target="_blank" rel="noopener">Open dashboard →</a></div>` : ''}
+    `;
+  }
+
+  function openStationPopup(stationId, lngLat) {
+    const s = stationById.get(stationId);
+    if (!s) return;
+    if (_popup) { _suppressNextPopupClose = true; _popup.remove(); _popup = null; }
+    _selectedCell = null;
+    _selectedStation = stationId;
+    const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
+      .setLngLat(lngLat || [s.longitude, s.latitude])
+      .setHTML(stationPopupHTML(stationId))
+      .addTo(map);
+    p.on('close', () => {
+      if (_suppressNextPopupClose) { _suppressNextPopupClose = false; return; }
+      if (_popup === p) {
+        _popup = null;
+        _selectedStation = null;
+        pushState();
+      }
+    });
+    _popup = p;
+    announceStation(stationId);
+    pushState();
+  }
+
+  function openPopupFor(cellId, lngLat) {
+    const c = cellById.get(cellId);
+    if (!c) return;
+    if (_popup) { _suppressNextPopupClose = true; _popup.remove(); _popup = null; }
+    _selectedStation = null;
+    _selectedCell = cellId;
+    const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
+      .setLngLat(lngLat || c.center)
+      .setHTML(popupHTML(cellId))
+      .addTo(map);
+    p.on('close', () => {
+      if (_suppressNextPopupClose) { _suppressNextPopupClose = false; return; }
+      if (_popup === p) {
+        _popup = null;
+        _selectedCell = null;
+        pushState();
+      }
+    });
+    _popup = p;
+    announceCell(cellId);
+    pushState();
+  }
+
+  // Track whether the next Popup `close` event was triggered programmatically
+  // (so we don't pushState for an open-replace; the new popup pushes its own).
+  let _suppressNextPopupClose = false;
+  function closePopup() {
+    if (!_popup) return;
+    _suppressNextPopupClose = true;
+    _popup.remove();
+    _popup = null;
+    if (_selectedCell || _selectedStation) {
+      _selectedCell = null;
+      _selectedStation = null;
+      pushState();
+    }
+  }
+
+  // ── Map event wiring ─────────────────────────────────────────────────────
+  // Keeps Montana filling the viewport: snaps back when the user zooms out past
+  // the fitted extent, and recomputes that floor after a resize settles (the
+  // zoom that fits MT is viewport-dependent).
+  const zoomFloor = MCO.map.installZoomFloor(map);
+
+  map.on('load', () => {
+    // Chips first: addCustomLayers() kicks off any saved overlay fetches, and
+    // those want a chip to hang their busy/error state on.
+    buildLayerChips();
+    addCustomLayers();
+    zoomFloor.refresh();
+    _mapReady = true;
+    // Kick off the data fetch once layers exist, so rebuildCells never lands
+    // before its source.
+    loadAll();
+  });
+
+  // Reflect every pan/zoom in the URL so the view is sharable
+  map.on('moveend', pushState);
+
+  // ── URL state push ───────────────────────────────────────────────────────
+  // Lists are space-joined; URLSearchParams encodes spaces as '+', giving tidy
+  // URLs like overlays=counties+hucs. Enum-string values are lowercase.
+  // Every parameter has a default and none is written while it matches, so a
+  // fresh load carries no query string at all (HOUSE-STYLE §4).
+  function osTheme() {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+
+  // Is the camera where a fresh load would have put it? cameraForBounds gives
+  // the same answer fitBounds acts on, so this stays correct as the container
+  // resizes rather than comparing against a stored constant.
+  function atDefaultExtent() {
+    if (!_mapReady) return true;
+    let want;
+    try { want = map.cameraForBounds(MT_FIT_BOUNDS, FIT_OPTS); } catch { return false; }
+    if (!want) return false;
+    const wc = want.center;
+    const wlng = typeof wc.lng === 'number' ? wc.lng : wc[0];
+    const wlat = typeof wc.lat === 'number' ? wc.lat : wc[1];
+    const c = map.getCenter();
+    return Math.abs(map.getZoom() - want.zoom) < 0.02
+        && Math.abs(c.lng - wlng) < 0.01
+        && Math.abs(c.lat - wlat) < 0.01;
+  }
+
+  function pushState() {
+    const params = {};
+    if (activeView === 'internal') params.internal = '1';
+    // Per-view category sets: only serialize when not the full set.
+    for (const view of VIEW_NAMES) {
+      const set = visibleCatsByView[view];
+      if (set.size !== allCatKeys(view).length) {
+        params[catParamKey(view)] = [...set].join(' ');
+      }
+    }
+    if (activeOverlays.size) params.overlays = [...activeOverlays].join(' ');
+    if (!stationsOn) params.stations = 'off';
+    if (labelsOn) params.labels = 'on';
+    if (legendCollapsed) params.legend = 'collapsed';
+    if (!kbdShortcuts) params.kbd = 'off';
+    // The theme's default is the OS preference, so emit it only when the user
+    // has gone against that. Their own choice is remembered in localStorage
+    // either way — the parameter exists so a shared link can carry a
+    // deliberate one, not so every link imposes the sender's theme.
+    const theme = MCO.getTheme();
+    if (theme && theme !== osTheme()) params.theme = theme;
+    // The camera's default is the fitted Montana extent. Emitted as a set,
+    // because the parser needs all three to position the map.
+    if (!atDefaultExtent()) Object.assign(params, MCO.map.cameraParams(map));
+    if (_selectedCell) params.cell = _selectedCell;
+    if (_selectedStation) params.station = _selectedStation;
+    MCO.replaceUrlState(params);
+  }
+
+  // ── Click handling ───────────────────────────────────────────────────────
+  // One dispatcher so a station dot and the cell beneath it can't double-fire.
+  map.on('click', (e) => {
+    const layers = ['stations-layer', 'cells-fill'].filter(l => map.getLayer(l));
+    const feats = layers.length ? map.queryRenderedFeatures(e.point, { layers }) : [];
+    if (feats.length === 0) { closePopup(); return; }
+    const f = feats.find(x => x.layer.id === 'stations-layer') || feats[0];
+    // A dot is a station, so it opens the station. Only a cell click resolves
+    // through cellById — which is also why a station whose ace_grid names no
+    // drawn cell used to be unclickable: the lookup failed and the handler bailed.
+    if (f.layer.id === 'stations-layer') {
+      openStationPopup(f.properties.station, f.geometry.coordinates.slice());
+      return;
+    }
+    const cell = normalizeCell(f.properties.cell);
+    if (!cellById.has(cell)) { closePopup(); return; }
+    openPopupFor(cell, e.lngLat);
+  });
+
+  // ── Hover tooltip ────────────────────────────────────────────────────────
+  const tooltipEl = document.getElementById('tooltip');
+  function showTooltip(f, e) {
+    let title, sub, line;
+    if (f.layer.id === 'stations-layer') {
+      // Hovering a dot asks about the station, and must work even when its
+      // ace_grid names no drawn cell.
+      const s = stationById.get(f.properties.station);
+      if (!s) return;
+      const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
+      const known = cell ? cellById.get(cell) : null;
+      title = s.name || s.station;
+      sub   = cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`;
+      line  = known
+        ? (known.ndawn ? 'Operational (NDAWN)' : catLabel(known.cat))
+        : `${catLabel(categoryFor(s.status, activeView))} · cell not in this grid`;
+    } else {
+      const cell = normalizeCell(f.properties.cell);
+      const c = cellById.get(cell);
+      if (!c) return;
+      const s = c.stationId ? stationById.get(c.stationId) : null;
+      title = s ? (s.name || s.station) : `Grid cell ${cell}`;
+      sub   = s ? `${s.station} · cell ${cell}` : cell;
+      line  = c.ndawn ? 'Operational (NDAWN)' : catLabel(c.cat);
+    }
+    tooltipEl.innerHTML =
+      `<span class="tooltip-name">${MCO.escapeHTML(title)}</span>` +
+      `<span class="tooltip-sub">${MCO.escapeHTML(sub)}</span>` +
+      `<span class="tooltip-line">${MCO.escapeHTML(line)}</span>`;
+    tooltipEl.classList.add('visible');
+    tooltipEl.style.left = `${e.originalEvent.clientX + 14}px`;
+    tooltipEl.style.top  = `${e.originalEvent.clientY + 14}px`;
+  }
+  function hideTooltip() { tooltipEl.classList.remove('visible'); }
+
+  // Single global mousemove dispatcher — does its own queryRenderedFeatures
+  // against the layer set. Avoids layer-scoped listeners, which can become
+  // detached when the style is swapped on theme toggle (MapLibre keeps the
+  // map-level handler stable across setStyle).
+  const HOVER_LAYERS = ['stations-layer', 'cells-fill'];
+  let _hovered = null;
+
+  map.on('mousemove', (e) => {
+    const layers = HOVER_LAYERS.filter(lid => map.getLayer(lid));
+    const feats = layers.length ? map.queryRenderedFeatures(e.point, { layers }) : [];
+    const f = feats.find(x => x.layer.id === 'stations-layer') || feats[0] || null;
+    if (f) {
+      map.getCanvas().style.cursor = 'pointer';
+      showTooltip(f, e);
+      _hovered = f.layer.id === 'stations-layer' ? f.properties.station : f.properties.cell;
+    } else if (_hovered !== null) {
+      map.getCanvas().style.cursor = '';
+      hideTooltip();
+      _hovered = null;
+    }
+  });
+  // Cursor + tooltip cleanup when the pointer leaves the map entirely.
+  map.getCanvas().addEventListener('mouseleave', () => {
+    map.getCanvas().style.cursor = '';
+    hideTooltip();
+    _hovered = null;
+  });
+
+  // Global keyboard shortcuts: Esc closes things; / focuses search.
+  // Escape is unaffected by ?kbd=off — it's a modifier-free key, but it only
+  // acts on already-open UI, so it can't be misfired into.
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closePopup(); return; }
+    if (kbdShortcuts && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const t = e.target;
+      const inField =
+        t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      if (inField) return;
+      e.preventDefault();
+      // When the field is collapsed the overlay has to open first — otherwise
+      // '/' focuses an input that is display:none and the keystroke is lost.
+      if (searchCtl.isCollapsed()) { searchCtl.open(); return; }
+      searchInput.focus();
+      searchInput.select();
+    }
+  });
+  // Keyboard nav inside the custom dropdown.
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      searchInput.value = '';
+      hideSearchDropdown();
+      // In the collapsed overlay, Escape should dismiss the bar and hand focus
+      // back to the toggle — blurring alone would strand focus on the body
+      // behind a still-open overlay.
+      if (searchCtl.isOpen()) { searchCtl.close(); return; }
+      searchInput.blur();
+      return;
+    }
+    if (searchDropdown.hidden) return;
+    const items = searchDropdown.querySelectorAll('li');
+    if (!items.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveSearchItem(_activeSearchIndex + 1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveSearchItem(_activeSearchIndex - 1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const idx = _activeSearchIndex >= 0 ? _activeSearchIndex : 0;
+      const id = items[idx].dataset.stationId;
+      if (id) selectStation(id);
+    }
+  });
+
+  // ── Refresh (manual data reload) ─────────────────────────────────────────
+  document.getElementById('btn-refresh').addEventListener('click', () => {
+    refreshStampEl.textContent = 'loading…';
+    loadAll();
+  });
+
+  // ── Labels toggle ────────────────────────────────────────────────────────
+  let labelsOn = (() => {
+    const u = getLower('labels');
+    if (u === 'on' || u === 'off') return u === 'on';
+    return MCO.lsGet('mco-status-labels') === 'on';
+  })();
+  const labelsBtn = document.getElementById('btn-labels');
+  labelsBtn.setAttribute('aria-pressed', labelsOn ? 'true' : 'false');
+  function applyLabelsVisibility() {
+    if (map.getLayer('cells-label')) {
+      map.setLayoutProperty('cells-label', 'visibility', labelsOn ? 'visible' : 'none');
+    }
+  }
+  labelsBtn.addEventListener('click', () => {
+    labelsOn = !labelsOn;
+    labelsBtn.setAttribute('aria-pressed', labelsOn ? 'true' : 'false');
+    MCO.lsSet('mco-status-labels', labelsOn ? 'on' : 'off');
+    applyLabelsVisibility();
+    pushState();
+  });
+
+  // ── Legend collapse/expand ───────────────────────────────────────────────
+  // MCO.initCollapsible owns the animation, [hidden] (so collapsed rows leave
+  // the tab order), aria-expanded, and persistence.
+  const legendToggleBtn = document.getElementById('legend-toggle-btn');
+  let legendCollapsed = (() => {
+    const u = getLower('legend');
+    if (u === 'open' || u === 'collapsed') return u === 'collapsed';
+    // The kit persists '1'/'0'; this page shipped 'collapsed'/'expanded'.
+    // Read both, or every returning visitor silently reverts to expanded
+    // (MIGRATING § gotchas).
+    const saved = MCO.lsGet('mco-status-legend');
+    if (saved === 'collapsed' || saved === '1') return true;
+    if (saved === 'expanded'  || saved === '0') return false;
+    return MCO.viewport.isCompact();   // no preference: start collapsed on a phone
+  })();
+
+  // apply() runs once at init and calls onChange with it. Don't let that first
+  // call reach pushState: it would rewrite the URL before the deep-link handler
+  // has set _selectedCell, stripping ?cell= off the very link that opened it.
+  let _legendInit = true;
+  MCO.initCollapsible({
+    toggle: legendToggleBtn,
+    body: document.getElementById('legend-body'),
+    storageKey: 'mco-status-legend',
+    startCollapsed: legendCollapsed,
+    onChange: (collapsed) => {
+      legendCollapsed = collapsed;
+      legendToggleBtn.setAttribute('aria-label', collapsed ? 'Expand legend' : 'Collapse legend');
+      if (!_legendInit) pushState();
+    },
+  });
+  _legendInit = false;
+
+  // ── Legend (Plotly-style toggles) ────────────────────────────────────────
+  // Single click toggles a category; double-click isolates that category
+  // (double-click an already-isolated category to show all again).
+  const LEGEND_DBLCLICK_MS = 280;
+
+  function categoryCounts() {
+    const counts = {};
+    for (const c of cellById.values()) counts[c.cat] = (counts[c.cat] || 0) + 1;
+    return counts;
+  }
+
+  function renderLegend() {
+    legendRowsEl.innerHTML = '';
+    const counts = categoryCounts();
+    const set = currentCats();
+    // Every category is listed, including ones no cell is currently in. The
+    // legend is the key to the color scheme, not a summary of what's on screen
+    // — dropping empty rows would hide what a color means until it happens to
+    // be in use, and make the public and internal keys look inconsistent.
+    for (const r of VIEWS[activeView].cats) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'legend-row';
+      row.dataset.catKey = r.key;
+      const on = set.has(r.key);
+      row.setAttribute('aria-pressed', on ? 'true' : 'false');
+      if (!on) row.classList.add('off');
+      const sw = document.createElement('span');
+      sw.className = 'legend-swatch';
+      sw.style.background = swatchColor(r.key);
+      sw.setAttribute('aria-hidden', 'true');
+      const lb = document.createElement('span');
+      lb.className = 'legend-lbl';
+      lb.textContent = r.label;
+      const ct = document.createElement('span');
+      ct.className = 'legend-count';
+      ct.textContent = String(counts[r.key] || 0);
+      row.appendChild(sw);
+      row.appendChild(lb);
+      row.appendChild(ct);
+      attachLegendHandlers(row, r.key);
+      legendRowsEl.appendChild(row);
+    }
+
+    // Station dots aren't a cell status, so they get a non-interactive row
+    // (their visibility lives on the Stations chip instead).
+    const stat = document.createElement('div');
+    stat.className = 'legend-static';
+    stat.innerHTML =
+      `<span class="legend-swatch" style="background:var(--c-station)" aria-hidden="true"></span>` +
+      `<span class="legend-lbl">Station location</span>`;
+    legendRowsEl.appendChild(stat);
+
+    const hint = document.createElement('div');
+    hint.className = 'legend-hint';
+    hint.textContent = 'Click to toggle · Double-click to isolate';
+    legendRowsEl.appendChild(hint);
+
+    const note = document.createElement('div');
+    note.className = 'legend-note';
+    note.textContent = 'Cell status subject to change';
+    legendRowsEl.appendChild(note);
+  }
+
+  function refreshLegendVisuals() {
+    const set = currentCats();
+    for (const row of legendRowsEl.querySelectorAll('.legend-row')) {
+      const on = set.has(row.dataset.catKey);
+      row.setAttribute('aria-pressed', on ? 'true' : 'false');
+      row.classList.toggle('off', !on);
+    }
+  }
+
+  function attachLegendHandlers(row, key) {
+    let clickTimer = null;
+    row.addEventListener('click', () => {
+      // Defer single-click action so a follow-up dblclick can pre-empt it.
+      if (clickTimer) return;   // already pending → second click; let dblclick handle it
+      clickTimer = setTimeout(() => {
+        clickTimer = null;
+        toggleCategory(key);
+      }, LEGEND_DBLCLICK_MS);
+    });
+    row.addEventListener('dblclick', () => {
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+      isolateCategory(key);
+    });
+    // Keyboard equivalent for double-click: Shift+Enter on a focused row
+    // isolates. (Plain Enter / Space still fires `click` natively → toggle.)
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+        isolateCategory(key);
+      }
+    });
+  }
+
+  function toggleCategory(key) {
+    const set = currentCats();
+    if (set.has(key)) set.delete(key);
+    else set.add(key);
+    refreshLegendVisuals();
+    applyAllFilters();
+    pushState();
+  }
+
+  function isolateCategory(key) {
+    const set = currentCats();
+    const all = currentAllCats();
+    // Already isolated to this key → restore everything.
+    if (set.size === 1 && set.has(key)) {
+      set.clear();
+      for (const k of all) set.add(k);
+    } else {
+      set.clear();
+      set.add(key);
+    }
+    refreshLegendVisuals();
+    applyAllFilters();
+    pushState();
+  }
+
+  // ── Boot ─────────────────────────────────────────────────────────────────
+  // The map's 'load' event drives layer creation and the data fetch — see
+  // map.on('load') above.
+  renderLegend();
+
+})();
