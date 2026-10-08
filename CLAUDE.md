@@ -48,6 +48,16 @@ the repo root from `main`, and the same page is reverse-proxied at
 `/api/v2/map/status/` path 301s here from the mesonet-db-rds API, and the
 mco-website UMRB page iframes this URL.
 
+`.github/workflows/preview.yml` runs nightly and **commits `assets/og-card.png`
+back to `main`** — always pull/rebase before pushing, or you race it. Each of
+those commits is itself a Pages redeploy.
+
+`scripts/generate_preview.py` screenshots the live Pages origin at 1200×630 with
+`?theme=light`, pre-setting `mco-status-seen-intro` so the intro modal stays
+shut, and waits on the same `#sr-cell-rows` readiness signal as the harness.
+That param, that localStorage key, and that table id are a contract — renaming
+any of them silently breaks the social card in production.
+
 ## Verification
 
 There is no CI for the page. Before any push, run the manual gates from
