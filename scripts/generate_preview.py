@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Regenerate assets/og-card.png (the og:image / twitter:image social card) as a
-1200x630 screenshot of the live GitHub Pages site in the light theme.
+screenshot of the live GitHub Pages site in the light theme: a 1200x630 layout
+rendered at 2x, so the PNG is 2400x1260 and stays crisp on high-DPI screens.
 
 Readiness is the same signal consumer-verify.mjs uses: the sr-only table twin
 fills with one row per drawn cell once the status data has rendered. The page
@@ -22,8 +23,9 @@ OUT = Path(__file__).parent.parent / "assets" / "og-card.png"
 # on the UMT reverse proxy that serves the canonical mesonet.climate.umt.edu/umrb/.
 URL = "https://mt-climate-office.github.io/mesonet-umrb-build/"
 QUERY = "theme=light"
-# og:image:width/height in index.html declare these exact dimensions.
-WIDTH, HEIGHT = 1200, 630
+# CSS viewport and pixel density. og:image:width/height in index.html declare
+# the resulting PNG size (WIDTH*SCALE x HEIGHT*SCALE) — keep them in step.
+WIDTH, HEIGHT, SCALE = 1200, 630, 2
 
 
 def main() -> None:
@@ -31,7 +33,7 @@ def main() -> None:
         browser = p.chromium.launch()
         ctx = browser.new_context(
             viewport={"width": WIDTH, "height": HEIGHT},
-            device_scale_factor=1,
+            device_scale_factor=SCALE,
             color_scheme="light",  # match the forced ?theme=light
         )
         # Suppress the first-visit intro modal, which would otherwise cover the

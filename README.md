@@ -77,7 +77,7 @@ distribution. **Pushing `main` is a production deploy.**
 
 `.github/workflows/preview.yml` runs nightly (and on manual dispatch): it runs
 `scripts/generate_preview.py`, which screenshots the live page in the light theme
-at 1200×630, and **commits the result to `assets/og-card.png` on `main`** — the
+at 2400×1260 (a 1200×630 layout at 2×), and **commits the result to `assets/og-card.png` on `main`** — the
 `og:image` social card. Pull before pushing, or you race it. To run it locally:
 
 ```sh

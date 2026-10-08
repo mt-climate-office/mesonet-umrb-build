@@ -52,7 +52,7 @@ mco-website UMRB page iframes this URL.
 back to `main`** — always pull/rebase before pushing, or you race it. Each of
 those commits is itself a Pages redeploy.
 
-`scripts/generate_preview.py` screenshots the live Pages origin at 1200×630 with
+`scripts/generate_preview.py` screenshots the live Pages origin (1200×630 layout at 2×, so 2400×1260) with
 `?theme=light`, pre-setting `mco-status-seen-intro` so the intro modal stays
 shut, and waits on the same `#sr-cell-rows` readiness signal as the harness.
 That param, that localStorage key, and that table id are a contract — renaming
