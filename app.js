@@ -1500,66 +1500,40 @@
     });
 
     // ── Hover tooltip ────────────────────────────────────────────────────────
-    const tooltipEl = document.getElementById('tooltip');
-    function showTooltip(f, e) {
-      let title, sub, line;
-      if (f.layer.id === 'stations-layer') {
-        // Hovering a dot asks about the station, and must work even when its
-        // ace_grid names no drawn cell.
-        const s = stationById.get(f.properties.station);
-        if (!s) return;
-        const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
-        const known = cell ? cellById.get(cell) : null;
-        title = s.name || s.station;
-        sub   = cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`;
-        line  = known
-          ? (known.ndawn ? 'Operational (NDAWN)' : catLabel(known.cat))
-          : `${catLabel(categoryFor(s.status, activeView))} · cell not in this grid`;
-      } else {
+    // The kit's cursor tooltip (kit 0.8.0) owns the mousemove dispatcher,
+    // cursor+14 positioning (flipped at the viewport edge), cursor: pointer and
+    // the mouseleave cleanup, and sets every line with textContent. A dot is
+    // queried before the cell under it. Decorative (aria-hidden): the same
+    // facts reach AT through the popup announcement and the table twin.
+    MCO.map.initCursorTooltip(map, {
+      element: document.getElementById('tooltip'),
+      layers: ['stations-layer', 'cells-fill'],
+      render: (f) => {
+        if (f.layer.id === 'stations-layer') {
+          // Hovering a dot asks about the station, and must work even when
+          // its ace_grid names no drawn cell.
+          const s = stationById.get(f.properties.station);
+          if (!s) return null;
+          const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
+          const known = cell ? cellById.get(cell) : null;
+          return {
+            name: s.name || s.station,
+            sub:  cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`,
+            line: known
+              ? (known.ndawn ? 'Operational (NDAWN)' : catLabel(known.cat))
+              : `${catLabel(categoryFor(s.status, activeView))} · cell not in this grid`,
+          };
+        }
         const cell = normalizeCell(f.properties.cell);
         const c = cellById.get(cell);
-        if (!c) return;
+        if (!c) return null;
         const s = c.stationId ? stationById.get(c.stationId) : null;
-        title = s ? (s.name || s.station) : `Grid cell ${cell}`;
-        sub   = s ? `${s.station} · cell ${cell}` : cell;
-        line  = c.ndawn ? 'Operational (NDAWN)' : catLabel(c.cat);
-      }
-      tooltipEl.innerHTML =
-        `<span class="tooltip-name">${MCO.escapeHTML(title)}</span>` +
-        `<span class="tooltip-sub">${MCO.escapeHTML(sub)}</span>` +
-        `<span class="tooltip-line">${MCO.escapeHTML(line)}</span>`;
-      tooltipEl.classList.add('visible');
-      tooltipEl.style.left = `${e.originalEvent.clientX + 14}px`;
-      tooltipEl.style.top  = `${e.originalEvent.clientY + 14}px`;
-    }
-    function hideTooltip() { tooltipEl.classList.remove('visible'); }
-
-    // Single global mousemove dispatcher — does its own queryRenderedFeatures
-    // against the layer set. Avoids layer-scoped listeners, which can become
-    // detached when the style is swapped on theme toggle (MapLibre keeps the
-    // map-level handler stable across setStyle).
-    const HOVER_LAYERS = ['stations-layer', 'cells-fill'];
-    let _hovered = null;
-
-    map.on('mousemove', (e) => {
-      const layers = HOVER_LAYERS.filter(lid => map.getLayer(lid));
-      const feats = layers.length ? map.queryRenderedFeatures(e.point, { layers }) : [];
-      const f = feats.find(x => x.layer.id === 'stations-layer') || feats[0] || null;
-      if (f) {
-        map.getCanvas().style.cursor = 'pointer';
-        showTooltip(f, e);
-        _hovered = f.layer.id === 'stations-layer' ? f.properties.station : f.properties.cell;
-      } else if (_hovered !== null) {
-        map.getCanvas().style.cursor = '';
-        hideTooltip();
-        _hovered = null;
-      }
-    });
-    // Cursor + tooltip cleanup when the pointer leaves the map entirely.
-    map.getCanvas().addEventListener('mouseleave', () => {
-      map.getCanvas().style.cursor = '';
-      hideTooltip();
-      _hovered = null;
+        return {
+          name: s ? (s.name || s.station) : `Grid cell ${cell}`,
+          sub:  s ? `${s.station} · cell ${cell}` : cell,
+          line: c.ndawn ? 'Operational (NDAWN)' : catLabel(c.cat),
+        };
+      },
     });
 
   }
