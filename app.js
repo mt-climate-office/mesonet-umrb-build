@@ -224,6 +224,20 @@
   // The kit owns backdrop-click, [data-close-modal] delegation, and
   // opener-captured focus restore.
   const btnInfo = document.getElementById('btn-info');
+  // On the landscape-phone rail the info button sits in the drawer: close the
+  // drawer before the dialog opens (capture, so it runs first), and when the
+  // dialog closes onto the now-hidden button, land on the rail's menu button.
+  btnInfo.addEventListener('click', () => {
+    if (rail.isOpen()) rail.close({ restoreFocus: false });
+  }, true);
+  infoModal.addEventListener('close', () => {
+    setTimeout(() => {
+      const a = document.activeElement;
+      if (rail.isRail() && (!a || a === document.body || !a.getClientRects().length)) {
+        document.getElementById('btn-rail-menu').focus();
+      }
+    }, 0);
+  });
   const infoModalCtl = MCO.initInfoModal({ dialog: infoModal, trigger: btnInfo });
 
   // Mark the intro seen AT OPEN, not on close. Someone who reads the modal and
@@ -1011,9 +1025,10 @@
     label: 'Stations',
     limit: SEARCH_MAX_RESULTS,
     onSelect: (id) => {
-      // Leave the field (and the compact overlay bar) so the popup the flight
-      // ends on isn't sitting under an open search.
+      // Leave the field (and the compact overlay bar, or the rail's drawer)
+      // so the popup the flight ends on isn't sitting under an open search.
       if (searchCtl.isOpen()) searchCtl.close({ restoreFocus: false });
+      if (rail.isOpen()) rail.close({ restoreFocus: false });
       searchInput.blur();
       flyToStation(id);
     },
@@ -1027,6 +1042,17 @@
     input:   searchInput,
     onClose: () => searchBox.close(),
   });
+
+  // Landscape-phone rail (kit 0.10.0): the bar's contents move into a drawer
+  // beside a 56px rail. The drawer contract (focus in, everything else inert,
+  // Esc / scrim / toggle close, focus back to the toggle) is the kit's.
+  const railMenuBtn = document.getElementById('btn-rail-menu');
+  const rail = MCO.initNavRail({
+    toggle: railMenuBtn,
+    drawer: document.getElementById('nav-drawer'),
+    scrim:  document.getElementById('rail-scrim'),
+  });
+  document.getElementById('btn-rail-search').addEventListener('click', () => rail.open(searchInput));
 
   // With ?kbd=off the '/' shortcut is disabled, so advertising it would be a
   // lie. (The kit already hides this hint inside the compact overlay bar.)
@@ -1362,6 +1388,8 @@
         t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
       if (inField) return;
       e.preventDefault();
+      // On the landscape-phone rail the field lives in the closed drawer.
+      if (rail.isRail()) { rail.open(searchInput); return; }
       // When the field is collapsed the overlay has to open first — otherwise
       // '/' focuses an input that is display:none and the keystroke is lost.
       if (searchCtl.isCollapsed()) { searchCtl.open(); return; }
