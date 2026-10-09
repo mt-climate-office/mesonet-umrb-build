@@ -95,7 +95,7 @@ earlier commits (back to the original Leaflet map) live in
 
 ## Tooling
 
-- [MapLibre GL JS](https://maplibre.org) v5.18 and [flatgeobuf](https://flatgeobuf.org) via CDN.
+- [MapLibre GL JS](https://maplibre.org) v6.11.2 (imported by the kit's `MCO.map.loadMapLibre()`, SRI via the import map) and [flatgeobuf](https://flatgeobuf.org) via CDN.
 - [mco-web-style](https://github.com/mt-climate-office/mco-web-style) design kit (pinned, SRI).
 - [CARTO Basemaps](https://carto.com/basemaps) Positron + Dark Matter.
 - Vanilla JS / HTML / CSS — no bundler, no framework.

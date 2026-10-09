@@ -37,6 +37,9 @@ export default {
       },
     },
     { name: 'internal', query: '?internal=1', ready: dataDrew },
+    // The legend starts collapsed on a phone, which hides its rows from the
+    // 390px touch-target pass; open it so they are measured too.
+    { name: 'legend-open', query: '?legend=open', ready: dataDrew },
   ],
   exemptTargets: '',
   allowProblems: [],
