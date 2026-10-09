@@ -203,10 +203,15 @@
   // owns that decision.
   const isDark = () => MCO.getTheme() !== 'light';
 
+  // Three states (kit 0.10.0): dark → light → high contrast → dark, so high
+  // contrast is reachable from the page, not only from ?theme=. The icon and
+  // the aria-label name the theme a press switches TO.
   MCO.initThemeToggle({
     button:   document.getElementById('btn-theme'),
     iconSun:  document.getElementById('icon-sun'),
     iconMoon: document.getElementById('icon-moon'),
+    iconContrast: document.getElementById('icon-contrast'),
+    cycle: true,
     onChange: () => {
       // The library still loading: initMap reads the theme when it runs.
       // Otherwise swap the basemap; onStyleLoad() puts our layers back.
