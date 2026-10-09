@@ -209,18 +209,9 @@
     iconSun:  document.getElementById('icon-sun'),
     iconMoon: document.getElementById('icon-moon'),
     onChange: () => {
-      if (!map) { pushState(); return; }   // library still loading: initMap reads the theme
-      map.setStyle(MCO.map.cartoStyleUrl());
-      map.once('style.load', () => {
-        addCustomLayers();   // re-add — setStyle wipes our sources/layers
-                             // (it also re-adds the active overlays)
-        rebuildCells();      // repopulate the now-empty cells source
-        // Swatch and pill colors are composited against the basemap, so they have
-        // to be regenerated rather than just left alone.
-        renderLegend();
-        if (_popup && _selectedCell) _popup.setDOMContent(cellPopupContent(_selectedCell));
-        else if (_popup && _selectedStation) _popup.setDOMContent(stationPopupContent(_selectedStation));
-      });
+      // The library still loading: initMap reads the theme when it runs.
+      // Otherwise swap the basemap; onStyleLoad() puts our layers back.
+      if (map) map.setStyle(MCO.map.cartoStyleUrl());
       pushState();
     },
   });
@@ -1436,7 +1427,28 @@
     if (legendCtl) legendCtl.set(currentCats());
   }
 
+  // Every style.load: the first one, a theme switch, the blank-basemap
+  // fallback, a basemap Retry.
+  function onStyleLoad() {
+    addCustomLayers();     // (also re-adds the active overlays)
+    if (!_mapReady) {
+      _mapReady = true;
+      zoomFloor.refresh();
+      // Kick off the data fetch once layers exist, so rebuildCells never
+      // lands before its source.
+      loadAll();
+      return;
+    }
+    rebuildCells();        // repopulate the now-empty cells source
+    // Swatch and pill colors are composited against the basemap, so they
+    // have to be regenerated rather than just left alone.
+    renderLegend();
+    if (_popup && _selectedCell) _popup.setDOMContent(cellPopupContent(_selectedCell));
+    else if (_popup && _selectedStation) _popup.setDOMContent(stationPopupContent(_selectedStation));
+  }
+
   // ── Map construction (after MapLibre 6 has loaded) ─────────────────────
+  let zoomFloor = null;
   function initMap() {
     map = new maplibregl.Map({
       container: 'map',
@@ -1450,19 +1462,20 @@
     // Keeps Montana filling the viewport: snaps back when the user zooms out past
     // the fitted extent, and recomputes that floor after a resize settles (the
     // zoom that fits MT is viewport-dependent).
-    const zoomFloor = MCO.map.installZoomFloor(map);
+    zoomFloor = MCO.map.installZoomFloor(map);
 
-    map.on('load', () => {
-      // Chips first: addCustomLayers() kicks off any saved overlay fetches, and
-      // those want a chip to hang their busy/error state on.
-      buildLayerChips();
-      addCustomLayers();
-      zoomFloor.refresh();
-      _mapReady = true;
-      // Kick off the data fetch once layers exist, so rebuildCells never lands
-      // before its source.
-      loadAll();
-    });
+    // Chips first: addCustomLayers() kicks off any saved overlay fetches, and
+    // those want a chip to hang their busy/error state on.
+    buildLayerChips();
+
+    // A dead basemap no longer strands the page: the kit retries the style,
+    // then falls back to a blank --bg-deep style (which DOES load, so the grid
+    // still draws) with a Retry notice (kit 0.8.0). That fallback, a theme
+    // switch, and a Retry all replace the style, and every replacement wipes
+    // our sources and layers, so they are re-added on EVERY style.load — not
+    // once on 'load', which never fires at all if the first style fails.
+    MCO.map.watchBasemap(map, { styleUrl: MCO.map.cartoStyleUrl });
+    map.on('style.load', onStyleLoad);
 
     // Reflect every pan/zoom in the URL so the view is sharable
     map.on('moveend', pushState);
