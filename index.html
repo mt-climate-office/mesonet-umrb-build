@@ -186,37 +186,10 @@
     #map-container { flex: 1; min-height: 0; position: relative; }
     #map { width: 100%; height: 100%; }
 
-    /* Empty-state callout — shown when the legend filters hide every cell.
-       Positioned center-top, doesn't block map interaction. */
-    #empty-state {
-      position: absolute;
-      top: 18px; left: 50%; transform: translateX(-50%);
-      z-index: var(--z-map-notice);
-      pointer-events: none;
-      max-width: calc(100% - 32px);
-    }
-    #empty-state[hidden] { display: none; }
-    .empty-state-card {
-      pointer-events: auto;
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      box-shadow: var(--shadow);
-      padding: 10px 14px;
-      font-size: 0.82rem;
-      color: var(--text-secondary);
-      display: flex; align-items: center; gap: 10px;
-    }
-    .empty-state-card strong { color: var(--text-primary); font-weight: 600; }
-
-    /* Data-unavailable banner — shown when the station-status fetch fails. */
-    #data-banner {
-      position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
-      z-index: calc(var(--z-map-notice) + 1); max-width: calc(100% - 32px);
-    }
-    #data-banner[hidden] { display: none; }
-    #data-banner .empty-state-card { background: var(--warning-fill); border-color: var(--warning); }
-    #data-banner strong { color: var(--text-primary); }
+    /* The empty-state callout is the kit's .mco-empty and the
+       data-unavailable banner the kit's .mco-notice (MCO.notice), both
+       floated over the map with data-place="over". */
+    #empty-state strong { color: var(--text-primary); font-weight: 600; }
 
     /* ── Search (primary action; lives in navbar) ─────────────────────────
        Field, icon and listbox are the kit's .mco-search (MCO.initSearchBox).
@@ -431,12 +404,9 @@
 <main id="main" tabindex="-1">
 <div id="map-container">
   <div id="map" role="application" aria-label="UMRB Mesonet station build status map"></div>
-  <!-- Shown when the station-status fetch fails or returns nothing. -->
-  <div id="data-banner" hidden role="status" aria-live="polite">
-    <div class="empty-state-card"><strong>Station status unavailable.</strong>&nbsp;Showing the grid without status — try Refresh.</div>
-  </div>
-  <!-- Centered message overlay; shown when no cells match the active filters. -->
-  <div id="empty-state" hidden role="status" aria-live="polite"></div>
+  <!-- A failed or empty station-status load shows an MCO.notice here (app.js).
+       This callout shows when the legend filters hide every cell. -->
+  <div id="empty-state" class="mco-empty" data-place="over" hidden role="status" aria-live="polite"></div>
 
   <aside id="legend" class="mco-panel" aria-labelledby="legend-title">
     <div class="legend-header mco-panel-head" id="legend-header">

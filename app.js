@@ -152,7 +152,6 @@
   const searchInput    = document.getElementById('search-input');
   const searchDropdown = document.getElementById('search-dropdown');
   const infoModal      = document.getElementById('info-modal');
-  const dataBannerEl   = document.getElementById('data-banner');
   const brandFlagEl    = document.getElementById('brand-flag');
 
   // Say what a popup opened via click, search, or deep-link contains, through
@@ -566,7 +565,12 @@
       const rows = Array.isArray(status) ? status : [];
       dataUnavailable = rows.length === 0;
       stations = rows;
-      dataBannerEl.hidden = !dataUnavailable;
+      if (dataUnavailable) {
+        showDataNotice('warning', 'Station status unavailable',
+          'Showing the grid without status.');
+      } else {
+        closeDataNotice();
+      }
 
       indexData();
       populateSearch();
@@ -596,8 +600,7 @@
     } catch (err) {
       console.error(err);
       dataUnavailable = true;
-      dataBannerEl.hidden = false;
-      MCO.showToast(`Error loading data: ${err.message}`);
+      showDataNotice('danger', 'Error', `The map data failed to load (${err.message}).`);
       // Still render whatever we have — an unshaded grid is better than nothing.
       indexData();
       populateSearch();
@@ -609,6 +612,27 @@
   }
   // Only consume the deep link once (initial load); Refresh shouldn't refly.
   let _deepLinkConsumed = false;
+
+  // A failed or empty load is a persistent kit notice over the map (kit
+  // 0.8.0, .mco-notice) with a Retry, rather than the page's own amber card:
+  // the tone word is visible text, it is announced once (assertively — a
+  // load failure), and it can be dismissed. One at a time; a good load
+  // closes it.
+  let _dataNotice = null;
+  function closeDataNotice() {
+    if (_dataNotice) { const n = _dataNotice; _dataNotice = null; n.close(); }
+  }
+  function showDataNotice(tone, toneLabel, text) {
+    closeDataNotice();
+    const n = MCO.notice({
+      tone, toneLabel, text,
+      container: document.getElementById('map-container'), place: 'over',
+      politeness: 'assertive',
+      action: { label: 'Retry', onClick: () => { closeDataNotice(); refreshData(); } },
+      onClose: () => { if (_dataNotice === n) _dataNotice = null; },
+    });
+    _dataNotice = n;
+  }
 
   // Build the station lookup and the cell → status join in one pass.
   function indexData() {
@@ -895,25 +919,24 @@
   }
 
   // Show a small callout when the filter state hides everything, so the user
-  // knows the empty map is intentional and how to recover.
+  // knows the empty map is intentional and how to recover. The kit's
+  // .mco-empty shell, floated over the map (data-place="over"); filled with
+  // DOM nodes, not an HTML string.
   const emptyStateEl = document.getElementById('empty-state');
   function updateEmptyState() {
     if (!emptyStateEl || cellById.size === 0) {
       if (emptyStateEl) emptyStateEl.hidden = true;
       return;
     }
-    let msg = null;
+    emptyStateEl.textContent = '';
     if (currentCats().size === 0) {
-      msg = '<strong>All legend categories hidden.</strong> Click a legend row to show cells.';
+      const strong = document.createElement('strong');
+      strong.textContent = 'All legend categories hidden.';
+      emptyStateEl.append(strong, ' Click a legend row to show cells.');
     } else if (![...cellById.values()].some(c => currentCats().has(c.cat))) {
-      msg = 'No grid cells match the current filters.';
+      emptyStateEl.textContent = 'No grid cells match the current filters.';
     }
-    if (msg) {
-      emptyStateEl.innerHTML = `<div class="empty-state-card">${msg}</div>`;
-      emptyStateEl.hidden = false;
-    } else {
-      emptyStateEl.hidden = true;
-    }
+    emptyStateEl.hidden = !emptyStateEl.textContent;
   }
 
   // ── Search (MCO.initSearchBox + flyTo + popup) ──────────────────────────
@@ -1269,11 +1292,12 @@
   });
 
   // ── Refresh (manual data reload) ─────────────────────────────────────────
-  document.getElementById('btn-refresh').addEventListener('click', () => {
+  function refreshData() {
     if (!_mapReady) return;   // the first load is still on its way
     refreshStampEl.textContent = 'loading…';
     loadAll();
-  });
+  }
+  document.getElementById('btn-refresh').addEventListener('click', refreshData);
 
   // ── Labels toggle ────────────────────────────────────────────────────────
   let labelsOn = (() => {
