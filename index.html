@@ -302,6 +302,13 @@
     @media (max-width: 640px) {
       .refresh-status { display: none; }   /* reclaim space on phones */
     }
+    /* kit-override: in rail mode (0.10.0+, kit RAIL_MQ) the compact
+       .mco-sheet still spans from left: 0, so its left 56px sit under the
+       fixed rail (known kit defect, fix in progress). Start it beside the
+       rail. Delete once the kit ships the fix. */
+    @media (max-height: 560px) and (orientation: landscape) {
+      .is-compact .mco-sheet { left: calc(var(--rail-w, 56px) + env(safe-area-inset-left)); }
+    }
     /* WCAG 2.5.5 — touch targets on touch-only devices: every control on
        this page is a kit control now (.nav-btn, .mco-btn-info,
        .mco-panel-toggle, .mco-chip, .mco-legend-row, .mco-search, the
