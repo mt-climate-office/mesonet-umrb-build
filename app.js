@@ -921,90 +921,29 @@
     }
   }
 
-  // ── Search (custom listbox dropdown + flyTo + popup) ─────────────────────
-  // Custom rather than native <datalist> so the popup honors the app theme.
-  let _searchSorted = [];
-  let _activeSearchIndex = -1;
+  // ── Search (MCO.initSearchBox + flyTo + popup) ──────────────────────────
+  // The kit's APG combobox (kit 0.8.0) on the dashboard's model: ranking,
+  // aria-activedescendant, a disabled "No matches" option, polite result
+  // counts, and Esc that closes, then clears, then passes through. This page
+  // and the maintenance map carried near-identical hand-rolled copies.
+  // Items are the stations a search can land on; a station's cell is a
+  // keyword, so typing "G-12" finds the station in that cell.
+  let _searchItems = [];
   const SEARCH_MAX_RESULTS = 8;
 
   function populateSearch() {
-    _searchSorted = stations
+    _searchItems = stations
       .filter(s => s && s.station && s.status !== 'decommissioned')
-      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  }
-
-  function matchScore(s, q) {
-    const n = (s.name || '').toLowerCase();
-    const id = (s.station || '').toLowerCase();
-    const cell = (s.ace_grid || '').toLowerCase();
-    if (n === q || id === q || cell === q) return 0;
-    if (n.startsWith(q))  return 1;
-    if (id.startsWith(q)) return 2;
-    if (cell.startsWith(q)) return 3;
-    if (n.includes(q))    return 4;
-    if (id.includes(q))   return 5;
-    return Infinity;
-  }
-
-  function showSearchDropdown(rawQuery) {
-    const q = rawQuery.trim().toLowerCase();
-    if (!q) { hideSearchDropdown(); return; }
-    const matches = _searchSorted
-      .map(s => ({ s, score: matchScore(s, q) }))
-      .filter(m => m.score < Infinity)
-      .sort((a, b) => a.score - b.score || (a.s.name || '').localeCompare(b.s.name || ''))
-      .slice(0, SEARCH_MAX_RESULTS)
-      .map(m => m.s);
-    searchDropdown.innerHTML = '';
-    if (matches.length === 0) {
-      const li = document.createElement('li');
-      li.className = 'empty';
-      li.setAttribute('aria-disabled', 'true');
-      li.textContent = `No stations match "${rawQuery.trim()}"`;
-      searchDropdown.appendChild(li);
-      searchDropdown.hidden = false;
-      searchInput.setAttribute('aria-expanded', 'true');
-      _activeSearchIndex = -1;
-      return;
-    }
-    for (const s of matches) {
-      const li = document.createElement('li');
-      li.setAttribute('role', 'option');
-      li.dataset.stationId = s.station;
-      li.id = `search-opt-${s.station}`;
-      const name = document.createElement('span');
-      name.className = 'search-name';
-      name.textContent = s.name || s.station;
-      const meta = document.createElement('span');
-      meta.className = 'search-meta';
-      meta.textContent = `${s.station} · ${s.ace_grid ? normalizeCell(s.ace_grid) : 'no cell'}`;
-      li.appendChild(name);
-      li.appendChild(meta);
-      // mousedown (not click) so the option commits before the input's blur.
-      li.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        selectStation(s.station);
+      .map((s) => {
+        const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
+        return {
+          id: s.station,
+          label: s.name || s.station,
+          keywords: cell ? [cell] : [],
+          meta: `${s.station} · ${cell || 'no cell'}`,
+        };
       });
-      searchDropdown.appendChild(li);
-    }
-    searchDropdown.hidden = false;
-    searchInput.setAttribute('aria-expanded', 'true');
-    _activeSearchIndex = -1;
-    searchInput.removeAttribute('aria-activedescendant');
-  }
-
-  function hideSearchDropdown() {
-    searchDropdown.hidden = true;
-    searchInput.setAttribute('aria-expanded', 'false');
-    _activeSearchIndex = -1;
-    searchInput.removeAttribute('aria-activedescendant');
-  }
-
-  function selectStation(stationId) {
-    hideSearchDropdown();
-    searchInput.value = '';
-    searchInput.blur();
-    flyToStation(stationId);
+    if (searchBox) searchBox.refresh();
   }
 
   // Searching a station lands on the STATION, not on its cell — the two only
@@ -1033,30 +972,28 @@
     map.once('moveend', () => openStationPopup(stationId));
   }
 
-  function setActiveSearchItem(idx) {
-    const items = searchDropdown.querySelectorAll('li');
-    if (!items.length) return;
-    if (idx < 0)             idx = items.length - 1;
-    if (idx >= items.length) idx = 0;
-    _activeSearchIndex = idx;
-    items.forEach((it, i) => it.classList.toggle('active', i === idx));
-    items[idx].scrollIntoView({ block: 'nearest' });
-    searchInput.setAttribute('aria-activedescendant', items[idx].id);
-  }
-
-  searchInput.addEventListener('input', () => showSearchDropdown(searchInput.value));
-  searchInput.addEventListener('focus', () => { if (searchInput.value) showSearchDropdown(searchInput.value); });
-  // Delay so a click/mousedown on an option can fire before we hide the list.
-  searchInput.addEventListener('blur',  () => setTimeout(hideSearchDropdown, 120));
+  const searchBox = MCO.initSearchBox({
+    input: searchInput,
+    listbox: searchDropdown,
+    items: () => _searchItems,
+    label: 'Stations',
+    limit: SEARCH_MAX_RESULTS,
+    onSelect: (id) => {
+      // Leave the field (and the compact overlay bar) so the popup the flight
+      // ends on isn't sitting under an open search.
+      if (searchCtl.isOpen()) searchCtl.close({ restoreFocus: false });
+      searchInput.blur();
+      flyToStation(id);
+    },
+  });
 
   // Below 640px the field collapses into a disclosure button grouped with the
   // other nav buttons and reopens as a full-width overlay bar under the navbar.
-  // The kit owns the collapse mechanics only — the combobox above stays ours.
   const searchCtl = MCO.initSearchCollapse({
     wrap:    document.getElementById('search-wrap'),
     toggle:  document.getElementById('btn-search-toggle'),
     input:   searchInput,
-    onClose: hideSearchDropdown,
+    onClose: () => searchBox.close(),
   });
 
   // With ?kbd=off the '/' shortcut is disabled, so advertising it would be a
@@ -1308,33 +1245,14 @@
       searchInput.select();
     }
   });
-  // Keyboard nav inside the custom dropdown.
+  // The kit's combobox owns the list keys. An Escape it did not consume (the
+  // list is closed and the field already empty) dismisses the compact overlay
+  // bar and hands focus back to the toggle — blurring alone would strand
+  // focus behind a still-open overlay.
   searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      searchInput.value = '';
-      hideSearchDropdown();
-      // In the collapsed overlay, Escape should dismiss the bar and hand focus
-      // back to the toggle — blurring alone would strand focus on the body
-      // behind a still-open overlay.
-      if (searchCtl.isOpen()) { searchCtl.close(); return; }
-      searchInput.blur();
-      return;
-    }
-    if (searchDropdown.hidden) return;
-    const items = searchDropdown.querySelectorAll('li');
-    if (!items.length) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setActiveSearchItem(_activeSearchIndex + 1);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setActiveSearchItem(_activeSearchIndex - 1);
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      const idx = _activeSearchIndex >= 0 ? _activeSearchIndex : 0;
-      const id = items[idx].dataset.stationId;
-      if (id) selectStation(id);
-    }
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    if (searchCtl.isOpen()) { e.stopPropagation(); searchCtl.close(); return; }
+    searchInput.blur();
   });
 
   // ── Refresh (manual data reload) ─────────────────────────────────────────
