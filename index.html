@@ -136,17 +136,17 @@
     /* ── App-owned palette ─────────────────────────────────────────────────
        Everything structural comes from the kit, the warning amber included
        (--warning / --warning-fill, kit 0.8.0, measured ≥ 4.5:1 on every
-       surface in all three themes; this page's own --c-warn / --warn-bg
-       copies are gone). What is left is a semantic color for THIS map's
-       data, which the kit deliberately does not own (HOUSE-STYLE §6), so it
-       is declared per theme, high-contrast included.
+       surface in all three themes; this page's own amber copies are gone).
+       What is left is a semantic color for THIS map's data, which the kit
+       deliberately does not own (HOUSE-STYLE §6), so it is declared per
+       theme, high-contrast included.
 
        The cell-status ramp itself lives in app.js with the rest of the
        category definitions. */
     :root {
       /* Station marker — achromatic on purpose, so it reads against every
-         cell color in the ramp. 17.3:1 on --bg-deep #161b22. */
-      --c-station: #ffffff;
+         cell color in the ramp. */
+      --c-station: #ffffff;              /* 17.3:1 on --bg-deep #161b22 */
     }
     [data-theme="light"] {
       --c-station: #0f1115;              /* 16.9:1 on --bg-deep #f0f2f5 */
@@ -504,8 +504,9 @@
         <li><strong>Legend</strong> — click a row to hide a status; double-click (or <kbd>Shift</kbd>+<kbd>Enter</kbd>) to isolate it.</li>
         <li><strong>Layers</strong> — chips toggle station dots and the county / watershed / tribal-land reference overlays.</li>
         <li><strong>Hover</strong> a cell for its status; <strong>click</strong> for station details and a dashboard link.</li>
-        <li>The tag button toggles <strong>grid cell labels</strong>.</li>
-        <li><kbd>Esc</kbd> closes any open popup.</li>
+        <li>The tag button toggles <strong>grid cell labels</strong>; the theme button steps dark → light → high contrast.</li>
+        <li><kbd>Esc</kbd> closes any open popup or detail sheet.</li>
+        <li>Single-key shortcuts get in the way of speech input: add <code>?kbd=off</code> to the URL to turn <kbd>/</kbd> off.</li>
       </ul>
     </div>
 
