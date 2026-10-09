@@ -1399,9 +1399,17 @@
   _legendInit = false;
 
   // ── Legend (Plotly-style toggles) ────────────────────────────────────────
-  // Single click toggles a category; double-click isolates that category
-  // (double-click an already-isolated category to show all again).
-  const LEGEND_DBLCLICK_MS = 280;
+  // The rows are the kit's .mco-legend-row, wired by MCO.initLegendToggles
+  // (kit 0.8.0): click toggles a category, double-click — or Shift+Enter, the
+  // keyboard twin — isolates it, double-click the isolated one to show all.
+  // Every change is announced. Off dims the SWATCH and strikes the label; the
+  // old `.legend-row.off { opacity: 0.4 }` dimmed the whole row and put its
+  // label at 2.7:1 (WCAG 1.4.3).
+  //
+  // The rows are built once — the categories are fixed per view — and only
+  // their swatch colors (composited against the basemap, so theme-dependent)
+  // and counts are refreshed after that.
+  let legendCtl = null;
 
   function categoryCounts() {
     const counts = {};
@@ -1409,10 +1417,8 @@
     return counts;
   }
 
-  function renderLegend() {
-    legendRowsEl.innerHTML = '';
-    const counts = categoryCounts();
-    const set = currentCats();
+  function buildLegend() {
+    legendRowsEl.textContent = '';
     // Every category is listed, including ones no cell is currently in. The
     // legend is the key to the color scheme, not a summary of what's on screen
     // — dropping empty rows would hide what a color means until it happens to
@@ -1420,25 +1426,17 @@
     for (const r of VIEWS[activeView].cats) {
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'legend-row';
-      row.dataset.catKey = r.key;
-      const on = set.has(r.key);
-      row.setAttribute('aria-pressed', on ? 'true' : 'false');
-      if (!on) row.classList.add('off');
+      row.className = 'mco-legend-row';
+      row.dataset.key = r.key;
       const sw = document.createElement('span');
-      sw.className = 'legend-swatch';
-      sw.style.background = swatchColor(r.key);
+      sw.className = 'mco-legend-swatch';
       sw.setAttribute('aria-hidden', 'true');
       const lb = document.createElement('span');
-      lb.className = 'legend-lbl';
+      lb.className = 'mco-legend-label';
       lb.textContent = r.label;
       const ct = document.createElement('span');
-      ct.className = 'legend-count';
-      ct.textContent = String(counts[r.key] || 0);
-      row.appendChild(sw);
-      row.appendChild(lb);
-      row.appendChild(ct);
-      attachLegendHandlers(row, r.key);
+      ct.className = 'mco-legend-count';
+      row.append(sw, lb, ct);
       legendRowsEl.appendChild(row);
     }
 
@@ -1446,9 +1444,15 @@
     // (their visibility lives on the Stations chip instead).
     const stat = document.createElement('div');
     stat.className = 'legend-static';
-    stat.innerHTML =
-      `<span class="legend-swatch" style="background:var(--c-station)" aria-hidden="true"></span>` +
-      `<span class="legend-lbl">Station location</span>`;
+    const ssw = document.createElement('span');
+    ssw.className = 'mco-legend-swatch';
+    ssw.dataset.shape = 'circle';
+    ssw.style.setProperty('--swatch', 'var(--c-station)');
+    ssw.setAttribute('aria-hidden', 'true');
+    const slb = document.createElement('span');
+    slb.className = 'mco-legend-label';
+    slb.textContent = 'Station location';
+    stat.append(ssw, slb);
     legendRowsEl.appendChild(stat);
 
     const hint = document.createElement('div');
@@ -1460,65 +1464,36 @@
     note.className = 'legend-note';
     note.textContent = 'Cell status subject to change';
     legendRowsEl.appendChild(note);
+
+    legendCtl = MCO.initLegendToggles({
+      rows: legendRowsEl.querySelectorAll('.mco-legend-row'),
+      visible: currentCats(),
+      noun: 'statuses',
+      onChange: (vis) => {
+        const set = currentCats();
+        set.clear();
+        for (const k of vis) set.add(k);
+        applyAllFilters();
+        pushState();
+      },
+    });
   }
 
+  function renderLegend() {
+    if (!legendCtl) buildLegend();
+    const counts = categoryCounts();
+    for (const row of legendRowsEl.querySelectorAll('.mco-legend-row')) {
+      const key = row.dataset.key;
+      row.querySelector('.mco-legend-swatch').style.setProperty('--swatch', swatchColor(key));
+      row.querySelector('.mco-legend-count').textContent = String(counts[key] || 0);
+    }
+  }
+
+  // Sync the rows to currentCats() after code outside the legend changed it
+  // (a search or deep link re-showing a hidden status). Silent: no
+  // announcement, no onChange.
   function refreshLegendVisuals() {
-    const set = currentCats();
-    for (const row of legendRowsEl.querySelectorAll('.legend-row')) {
-      const on = set.has(row.dataset.catKey);
-      row.setAttribute('aria-pressed', on ? 'true' : 'false');
-      row.classList.toggle('off', !on);
-    }
-  }
-
-  function attachLegendHandlers(row, key) {
-    let clickTimer = null;
-    row.addEventListener('click', () => {
-      // Defer single-click action so a follow-up dblclick can pre-empt it.
-      if (clickTimer) return;   // already pending → second click; let dblclick handle it
-      clickTimer = setTimeout(() => {
-        clickTimer = null;
-        toggleCategory(key);
-      }, LEGEND_DBLCLICK_MS);
-    });
-    row.addEventListener('dblclick', () => {
-      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
-      isolateCategory(key);
-    });
-    // Keyboard equivalent for double-click: Shift+Enter on a focused row
-    // isolates. (Plain Enter / Space still fires `click` natively → toggle.)
-    row.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.shiftKey) {
-        e.preventDefault();
-        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
-        isolateCategory(key);
-      }
-    });
-  }
-
-  function toggleCategory(key) {
-    const set = currentCats();
-    if (set.has(key)) set.delete(key);
-    else set.add(key);
-    refreshLegendVisuals();
-    applyAllFilters();
-    pushState();
-  }
-
-  function isolateCategory(key) {
-    const set = currentCats();
-    const all = currentAllCats();
-    // Already isolated to this key → restore everything.
-    if (set.size === 1 && set.has(key)) {
-      set.clear();
-      for (const k of all) set.add(k);
-    } else {
-      set.clear();
-      set.add(key);
-    }
-    refreshLegendVisuals();
-    applyAllFilters();
-    pushState();
+    if (legendCtl) legendCtl.set(currentCats());
   }
 
   // ── Map construction (after MapLibre 6 has loaded) ─────────────────────
