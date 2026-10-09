@@ -28,14 +28,6 @@
   const GRIDS_URL  = 'data/mt_grids_simple.geojson';
   const STATE_URL  = 'data/mt_state_simple.geojson';
 
-  // Initial fit (a touch padded around Montana's actual extent). Snapback on
-  // zoom-out uses these same bounds — matching the maintenance map.
-  // The Montana extent and its fit options are kit defaults
-  // (MCO.map.MT_FIT_BOUNDS / MCO.map.FIT_OPTS); aliased here for the few direct
-  // fitBounds/cameraForBounds calls below rather than redeclared.
-  const MT_FIT_BOUNDS = MCO.map.MT_FIT_BOUNDS;
-  const FIT_OPTS      = MCO.map.FIT_OPTS;
-
   const SEARCH_FLY_ZOOM  = 9;      // zoom when search/deep-link flies to a cell
   const SEARCH_FLY_SPEED = 1.4;
   const CELL_LABEL_MINZOOM    = 6; // grid cell IDs
@@ -1327,27 +1319,6 @@
   // URLs like overlays=counties+hucs. Enum-string values are lowercase.
   // Every parameter has a default and none is written while it matches, so a
   // fresh load carries no query string at all (HOUSE-STYLE §4).
-  function osTheme() {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  }
-
-  // Is the camera where a fresh load would have put it? cameraForBounds gives
-  // the same answer fitBounds acts on, so this stays correct as the container
-  // resizes rather than comparing against a stored constant.
-  function atDefaultExtent() {
-    if (!_mapReady) return true;
-    let want;
-    try { want = map.cameraForBounds(MT_FIT_BOUNDS, FIT_OPTS); } catch { return false; }
-    if (!want) return false;
-    const wc = want.center;
-    const wlng = typeof wc.lng === 'number' ? wc.lng : wc[0];
-    const wlat = typeof wc.lat === 'number' ? wc.lat : wc[1];
-    const c = map.getCenter();
-    return Math.abs(map.getZoom() - want.zoom) < 0.02
-        && Math.abs(c.lng - wlng) < 0.01
-        && Math.abs(c.lat - wlat) < 0.01;
-  }
-
   function pushState() {
     const params = {};
     if (activeView === 'internal') params.internal = '1';
@@ -1361,17 +1332,22 @@
     if (activeOverlays.size) params.overlays = [...activeOverlays].join(' ');
     if (!stationsOn) params.stations = 'off';
     if (labelsOn) params.labels = 'on';
-    if (legendCollapsed) params.legend = 'collapsed';
+    // The legend's default is viewport-dependent (collapsed on a phone), so
+    // emit it only when it differs from what a fresh load here would pick.
+    if (legendCollapsed !== MCO.viewport.isCompact()) params.legend = legendCollapsed ? 'collapsed' : 'open';
     if (!kbdShortcuts) params.kbd = 'off';
     // The theme's default is the OS preference, so emit it only when the user
     // has gone against that. Their own choice is remembered in localStorage
     // either way — the parameter exists so a shared link can carry a
     // deliberate one, not so every link imposes the sender's theme.
     const theme = MCO.getTheme();
-    if (theme && theme !== osTheme()) params.theme = theme;
+    if (theme && theme !== MCO.osTheme()) params.theme = theme;
     // The camera's default is the fitted Montana extent. Emitted as a set,
     // because the parser needs all three to position the map.
-    if (!atDefaultExtent()) Object.assign(params, MCO.map.cameraParams(map));
+    // cameraParamsIfDefault (kit 0.8.0) writes nothing while the camera is
+    // where a fresh load would put it; this file used to carry that as
+    // atDefaultExtent().
+    if (_mapReady) Object.assign(params, MCO.map.cameraParamsIfDefault(map));
     if (_selectedCell) params.cell = _selectedCell;
     if (_selectedStation) params.station = _selectedStation;
     MCO.replaceUrlState(params);
