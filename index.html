@@ -134,11 +134,12 @@
 
   <style>
     /* ── App-owned palette ─────────────────────────────────────────────────
-       Everything structural comes from the kit. These three are semantic
-       colors for THIS map's data and the kit deliberately does not own them
-       (HOUSE-STYLE §6: data-palette colors stay with the app). They have to be
-       declared per theme, including high-contrast — a theme this page did not
-       previously have.
+       Everything structural comes from the kit, the warning amber included
+       (--warning / --warning-fill, kit 0.8.0, measured ≥ 4.5:1 on every
+       surface in all three themes; this page's own --c-warn / --warn-bg
+       copies are gone). What is left is a semantic color for THIS map's
+       data, which the kit deliberately does not own (HOUSE-STYLE §6), so it
+       is declared per theme, high-contrast included.
 
        The cell-status ramp itself lives in app.js with the rest of the
        category definitions. */
@@ -146,26 +147,12 @@
       /* Station marker — achromatic on purpose, so it reads against every
          cell color in the ramp. 17.3:1 on --bg-deep #161b22. */
       --c-station: #ffffff;
-      /* Amber: the .brand-flag text and the data-unavailable banner's accent.
-         7.8:1 on #161b22. */
-      --c-warn:    #e0a32e;
-      --warn-bg:   rgba(224,163,46,0.14);
     }
     [data-theme="light"] {
       --c-station: #0f1115;              /* 16.9:1 on --bg-deep #f0f2f5 */
-      /* Darkened from the dark-theme amber, which is only 2.2:1 on the light
-         navbar glass — it was failing AA as .brand-flag text before this
-         migration. #7d5a0e is 6.2:1 there and 5.6:1 on --bg-deep. */
-      --c-warn:    #7d5a0e;
-      --warn-bg:   rgba(176,120,20,0.12);
     }
     [data-theme="high-contrast"] {
       --c-station: #ffffff;              /* 21:1 on #000000 */
-      /* The dark-theme amber is 9.5:1 here, which already clears AAA, but this
-         theme's other accents sit far higher; #ffd166 is 14.6:1 and keeps the
-         warning legible next to them rather than reading as the dim one. */
-      --c-warn:    #ffd166;
-      --warn-bg:   rgba(255,209,102,0.18);
     }
 
     /* ── Navbar (app-specific remainder) ───────────────────────────────────
@@ -182,7 +169,7 @@
     .brand-flag {
       font-family: var(--font-mono);
       font-size: 0.55rem; letter-spacing: 0.08em; text-transform: uppercase;
-      color: var(--c-warn);
+      color: var(--warning);
     }
 
     /* .controls and .refresh-status (dot included) both live in the kit and were
@@ -228,7 +215,7 @@
       z-index: calc(var(--z-map-notice) + 1); max-width: calc(100% - 32px);
     }
     #data-banner[hidden] { display: none; }
-    #data-banner .empty-state-card { background: var(--warn-bg); border-color: var(--c-warn); }
+    #data-banner .empty-state-card { background: var(--warning-fill); border-color: var(--warning); }
     #data-banner strong { color: var(--text-primary); }
 
     /* ── Search (primary action; lives in navbar) ─────────────────────────
