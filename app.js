@@ -155,28 +155,29 @@
   const dataBannerEl   = document.getElementById('data-banner');
   const brandFlagEl    = document.getElementById('brand-flag');
 
-  // Push a sentence to the aria-live region so screen-reader users hear what a
-  // popup opened via click, search, or deep-link contains.
-  const srAnnounceEl = document.getElementById('sr-announce');
+  // Say what a popup opened via click, search, or deep-link contains, through
+  // the kit's one announcer (MCO.announce, kit 0.8.0): its live regions exist
+  // from load, and it clears before setting so reopening the same cell is
+  // read again — the hand-made #sr-announce region did neither.
   function announceCell(cellId) {
     const c = cellById.get(cellId);
-    if (!c || !srAnnounceEl) return;
+    if (!c) return;
     const label = catLabel(c.cat);
     const s = c.stationId ? stationById.get(c.stationId) : null;
-    srAnnounceEl.textContent = s
+    MCO.announce(s
       ? `Cell ${cellId}, ${label}, ${s.name}.`
-      : `Cell ${cellId}, ${label}.`;
+      : `Cell ${cellId}, ${label}.`);
   }
   // Same, for a popup opened on a station dot rather than a cell.
   function announceStation(stationId) {
     const s = stationById.get(stationId);
-    if (!s || !srAnnounceEl) return;
+    if (!s) return;
     const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
     const known = cell ? cellById.get(cell) : null;
     const label = catLabel(known ? known.cat : categoryFor(s.status, activeView));
-    srAnnounceEl.textContent = known
+    MCO.announce(known
       ? `${s.name || s.station}, ${label}, cell ${cell}.`
-      : `${s.name || s.station}, ${label}, no cell in this grid.`;
+      : `${s.name || s.station}, ${label}, no cell in this grid.`);
   }
 
   function fmtDate(iso) {
