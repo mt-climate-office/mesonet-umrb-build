@@ -212,27 +212,24 @@
     /* Hide the / hint once the user has focused the search (or while typing). */
     #search-wrap:focus-within .search-kbd { opacity: 0; }
 
-    /* ── Layer chips (navbar toggles) ─────────────────────────────────────── */
-    .chip-group { display: flex; gap: 4px; }
-    .chip {
-      display: inline-flex; align-items: center; gap: 5px;
-      height: 30px; padding: 0 9px;
-      border: 1px solid var(--border); border-radius: 999px;
-      background: none; color: var(--text-secondary);
-      font: inherit; font-size: 0.72rem; font-weight: 600;
-      cursor: pointer; white-space: nowrap;
-      transition: var(--transition);
+    /* ── Layer chips (navbar toggles) ─────────────────────────────────────
+       The kit's .mco-chips / .mco-chip (0.9.0): pressed adds a ✓, so the
+       state is not color alone; 40px on touch. */
+    /* kit-override: .mco-chips wraps. In this navbar, at phone width, the
+       four chips only just fit one row, so a wrap starts the moment a second
+       chip gains its ✓ — the navbar grows 100 → 147px and the map jumps
+       under the finger that pressed it. Keep the row on one line and let it
+       scroll sideways instead; the padding keeps focus rings unclipped. */
+    @media (max-width: 640px) {
+      #layer-filters.mco-chips {
+        flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+        flex: 1 1 0; min-width: 0;
+        margin: -4px; padding: 4px;
+      }
+      /* …and its flex parent must be allowed to be narrower than the row. */
+      #navbar .controls { min-width: 0; }
+      #layer-filters.mco-chips::-webkit-scrollbar { display: none; }
     }
-    .chip:hover { border-color: var(--accent-line); color: var(--text-primary); background: var(--accent-hover); }
-    .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent-line); color: var(--text-on-accent); }
-    .chip[aria-busy="true"] { opacity: 0.65; cursor: progress; }
-    .chip .chip-count {
-      font-family: var(--font-mono); font-size: 0.65rem;
-      padding: 1px 5px; border-radius: 999px;
-      background: var(--border-glass); color: inherit;
-    }
-    /* Keep the count badge legible when the chip is pressed (accent background). */
-    .chip[aria-pressed="true"] .chip-count { background: rgba(0,0,0,0.28); color: var(--text-on-accent); }
 
     /* ── Legend (bottom-left, collapsible) ────────────────────────────────── */
     /* The panel shell, its header/title/toggle, the caret rotation and the
@@ -305,12 +302,10 @@
     @media (max-width: 640px) {
       .refresh-status { display: none; }   /* reclaim space on phones */
     }
-    /* WCAG 2.5.5 — comfortable touch targets on touch-only devices. The kit
-       already sizes .nav-btn, .mco-btn-info and .mco-panel-toggle; what is
-       left here is this map's own controls. */
-    @media (hover: none) {
-      .chip { min-height: 40px; }
-      }
+    /* WCAG 2.5.5 — touch targets on touch-only devices: every control on
+       this page is a kit control now (.nav-btn, .mco-btn-info,
+       .mco-panel-toggle, .mco-chip, .mco-legend-row, .mco-search, the
+       popup action and close), and the kit sizes them all to 40px. */
   </style>
 </head>
 <body>
@@ -349,7 +344,7 @@
     </div>
 
     <!-- Layers (multi-select): station dots plus the three reference overlays. -->
-    <div class="chip-group" id="layer-filters" role="group" aria-label="Layer toggles"></div>
+    <div class="mco-chips" id="layer-filters" role="group" aria-label="Layer toggles"></div>
   </div>
 
   <div class="nav-meta">

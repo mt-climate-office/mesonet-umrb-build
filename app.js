@@ -859,7 +859,7 @@
   }
 
   // ── Layer chip UI ────────────────────────────────────────────────────────
-  function chipEl(key) { return layerFiltersEl.querySelector(`.chip[data-layer="${key}"]`); }
+  function chipEl(key) { return layerFiltersEl.querySelector(`.mco-chip[data-layer="${key}"]`); }
   function setChipBusy(key, busy) {
     const el = chipEl(key);
     if (el) el.setAttribute('aria-busy', busy ? 'true' : 'false');
@@ -878,7 +878,7 @@
     for (const e of entries) {
       const chip = document.createElement('button');
       chip.type = 'button';
-      chip.className = 'chip';
+      chip.className = 'mco-chip';
       chip.dataset.layer = e.key;
       chip.textContent = e.label;
       chip.setAttribute('aria-pressed', e.pressed() ? 'true' : 'false');
