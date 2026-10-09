@@ -306,46 +306,19 @@
     }
 
     /* ── Popup ─────────────────────────────────────────────────────────────── */
-    /* MapLibre popups ship with NO z-index, so they need a tier of their own.
-       --z-detail sits above the legend panel and the map notices, and below the
-       search dropdown (--z-flyout), the tooltip (--z-cursor) and the navbar. */
-    .maplibregl-popup { max-width: 320px !important; z-index: var(--z-detail); }
-    .maplibregl-popup-content {
-      background: var(--bg-surface) !important;
-      color: var(--text-primary) !important;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md) !important;
-      padding: 12px 14px 12px !important;
-      box-shadow: var(--shadow) !important;
-      font-family: var(--font-ui);
-    }
-    .maplibregl-popup-tip { border-top-color: var(--bg-surface) !important; border-bottom-color: var(--bg-surface) !important; }
-    .maplibregl-popup-close-button {
-      color: var(--text-muted) !important;
-      font-size: 1.1rem !important; padding: 2px 6px !important;
-    }
-    .pop-title { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); line-height: 1.2; padding-right: 18px; }
-    .pop-sub   { font-size: 0.7rem; color: var(--text-muted); font-family: var(--font-mono); margin-top: 2px; }
+    /* The shell (surface, border, tip, close button, --z-detail tier), the
+       title/subtitle, the .mco-facts list and the action bar are the kit's
+       (MCO.map.popupContent). Left here: this map's status pill and notes. */
     .pop-pill {
       display: inline-block; font-size: 0.64rem; font-weight: 600; padding: 2px 8px;
-      border-radius: 999px; margin-top: 6px; color: #fff; text-transform: uppercase; letter-spacing: 0.04em;
-      /* Filled from the active category color at render time. */
+      border-radius: 999px; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.04em;
+      /* Fill AND text color are set at render time from the active category
+         (readableOn() picks the better of light/dark text, ≥ 4.5:1). */
     }
-    .pop-facts {
-      margin-top: 8px; padding: 6px 8px; background: var(--bg-raised); border-radius: var(--radius-sm);
-      font-size: 0.74rem; color: var(--text-secondary); line-height: 1.5;
-      display: grid; grid-template-columns: auto 1fr; gap: 2px 10px;
-    }
-    .pop-facts dt { color: var(--text-muted); }
-    .pop-facts dd { color: var(--text-primary); font-family: var(--font-mono); font-size: 0.7rem; }
-    .pop-note { margin-top: 8px; font-size: 0.74rem; color: var(--text-secondary); line-height: 1.45; }
-    .pop-note a { color: var(--accent-light); text-decoration: none; }
-    .pop-note a:hover { text-decoration: underline; }
-    .pop-empty { font-size: 0.72rem; color: var(--text-muted); font-style: italic; margin-top: 6px; }
-    .pop-links { margin-top: 10px; }
-    .pop-links a { font-size: 0.78rem; color: var(--accent-light); text-decoration: none; display: inline-flex; align-items: center; gap: 5px; }
-    .pop-links a:hover { text-decoration: underline; }
-
+    .pop-note { margin: 8px 0 0; font-size: 0.74rem; color: var(--text-secondary); line-height: 1.45; }
+    /* A link in prose needs more than color (WCAG 1.4.1): underlined. */
+    .pop-note a { color: var(--accent-line); text-decoration: underline; text-underline-offset: 2px; }
+    .pop-empty { margin: 6px 0 0; font-size: 0.72rem; color: var(--text-muted); font-style: italic; }
 
     /* ── Tooltip (app-specific lines) ───────────────────────────────────────
        The kit owns .mco-tooltip and its .tooltip-name / .tooltip-sub. It also
@@ -390,10 +363,7 @@
        left here is this map's own controls. */
     @media (hover: none) {
       .chip { min-height: 40px; }
-        /* The popup's dashboard link is a standalone control, not an inline
-         link in prose, so it needs the full target height too. */
-      .pop-links a { min-height: 40px; }
-    }
+      }
   </style>
 </head>
 <body>

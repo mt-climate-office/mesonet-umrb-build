@@ -218,7 +218,8 @@
         // Swatch and pill colors are composited against the basemap, so they have
         // to be regenerated rather than just left alone.
         renderLegend();
-        if (_popup && _selectedCell) _popup.setHTML(popupHTML(_selectedCell));
+        if (_popup && _selectedCell) _popup.setDOMContent(cellPopupContent(_selectedCell));
+        else if (_popup && _selectedStation) _popup.setDOMContent(stationPopupContent(_selectedStation));
       });
       pushState();
     },
@@ -358,14 +359,17 @@
     return toHex(c.map((v, i) => v * a + bg[i] * (1 - a)));
   }
   // Pills are solid, so their label has to flip between light and dark text
-  // depending on the fill — white on the amber "build in progress" is 1.75:1.
-  // Picking whichever has more contrast clears WCAG AA for every color in the
-  // palette (worst case 4.54:1).
+  // depending on the fill. Picking whichever of white / black has more
+  // contrast clears WCAG 1.4.3 AA for every fill in both views and every
+  // theme (worst case 4.73:1). The dark option used to be #1a1a2e, which
+  // left three mid-lightness fills under 4.5:1 — "Pending 2027" on dark
+  // (#b2742a, 4.41:1), "Build in progress" on light (#0481ab, 4.44:1) and
+  // "Station structure complete" on dark (#3887c5, 4.42:1). Found by axe
+  // on the orphan-station popup; no earlier scan opened a popup.
   function readableOn(hex) {
     const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
     const l = relLum(parseHex(hex));
-    return ratio(l, relLum([255, 255, 255])) >= ratio(l, relLum([26, 26, 46]))
-      ? '#ffffff' : '#1a1a2e';
+    return ratio(l, 1) >= ratio(l, 0) ? '#ffffff' : '#000000';
   }
 
   // ── Layer toggles (station dots + reference overlays) ─────────────────────
@@ -1021,60 +1025,81 @@
   }
 
   // ── Popup ────────────────────────────────────────────────────────────────
-  function popupHTML(cellId) {
+  // Built with DOM APIs, never HTML strings (HOUSE-STYLE §7): the shell, title,
+  // subtitle, the .mco-facts list and the dashboard action come from the
+  // kit's MCO.map.popupContent(); this map adds its status pill and notes.
+  // Every API value goes in as text.
+
+  // The status pill, filled from the active category color. Pills are solid,
+  // so the label picks whichever of light/dark text reads better on the fill.
+  function statusPill(cat) {
+    const color = catColor(cat);
+    const pill = document.createElement('span');
+    pill.className = 'pop-pill';
+    pill.style.background = color;
+    pill.style.color = readableOn(color);
+    pill.textContent = catLabel(cat);
+    return pill;
+  }
+  function note(cls, ...parts) {
+    const el = document.createElement('p');
+    el.className = cls;
+    el.append(...parts);
+    return el;
+  }
+  // popupContent(o) plus the pill and any notes, slotted in after the
+  // subtitle (or the title) and before the facts.
+  function buildPopup(o, cat, notes) {
+    const frag = MCO.map.popupContent(o);
+    const root = frag.querySelector('.mco-popup');
+    const head = root.querySelector('.mco-popup-sub') || root.querySelector('.mco-popup-title');
+    head.after(statusPill(cat), ...(notes || []));
+    return frag;
+  }
+  const dashAction = (s) => [{ label: 'Open dashboard', href: DASH_URL(s.station) }];
+
+  function cellPopupContent(cellId) {
     const c = cellById.get(cellId);
-    if (!c) return '';
-    const color = catColor(c.cat);
-    const pill = `<span class="pop-pill" style="background:${color};color:${readableOn(color)}">${MCO.escapeHTML(catLabel(c.cat))}</span>`;
+    if (!c) return null;
     const s = c.stationId ? stationById.get(c.stationId) : null;
+    const title = `Grid cell ${cellId}`;
 
     if (c.ndawn) {
-      return `
-        <div class="pop-title">Grid cell ${MCO.escapeHTML(cellId)}</div>
-        ${pill}
-        <div class="pop-note">Station installed and maintained by
-          <a href="https://ndawn.ndsu.nodak.edu/" target="_blank" rel="noopener">NDAWN</a>.</div>
-      `;
+      const a = document.createElement('a');
+      a.href = 'https://ndawn.ndsu.nodak.edu/';
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = 'NDAWN';
+      return buildPopup({ title }, c.cat, [note('pop-note', 'Station installed and maintained by ', a, '.')]);
     }
     if (!s) {
-      return `
-        <div class="pop-title">Grid cell ${MCO.escapeHTML(cellId)}</div>
-        ${pill}
-        <div class="pop-empty">No station assigned to this cell yet.</div>
-      `;
+      return buildPopup({ title }, c.cat, [note('pop-empty', 'No station assigned to this cell yet.')]);
     }
-
     // An operational station has a real location and history; everything else
     // is a proposal, so the location is labelled as such and the install-date /
     // dashboard rows are omitted (there is nothing to link to yet).
     const live = c.cat === 'active';
-    const rows = stationFactRows(s, live);
-
-    return `
-      <div class="pop-title">${MCO.escapeHTML(s.name || s.station)}</div>
-      <div class="pop-sub">${MCO.escapeHTML(s.station)} · cell ${MCO.escapeHTML(cellId)}</div>
-      ${pill}
-      <dl class="pop-facts">${rows.join('')}</dl>
-      ${live ? `<div class="pop-links"><a href="${DASH_URL(s.station)}" target="_blank" rel="noopener">Open dashboard →</a></div>` : ''}
-    `;
+    return buildPopup({
+      title: s.name || s.station,
+      subtitle: `${s.station} · cell ${cellId}`,
+      facts: stationFacts(s, live),
+      actions: live ? dashAction(s) : [],
+    }, c.cat);
   }
 
-  // Shared fact rows for the cell popup above and the station popup below.
+  // Shared facts for the cell popup above and the station popup below.
   // `live` means "a real, installed station" — everything else is a proposal,
   // so the location reads as proposed and there is no install date to show.
-  function stationFactRows(s, live) {
+  function stationFacts(s, live) {
     const coords = (s.longitude != null && s.latitude != null)
       ? `${s.longitude.toFixed(4)}, ${s.latitude.toFixed(4)}` : '—';
-    const rows = [];
-    rows.push(`<dt>${live ? 'Location' : 'Proposed'}</dt><dd>${MCO.escapeHTML(coords)}</dd>`);
+    const facts = [[live ? 'Location' : 'Proposed', coords]];
     if (live && Number.isFinite(Number(s.elevation))) {
-      rows.push(`<dt>Elevation</dt><dd>${Math.round(Number(s.elevation) * 3.281).toLocaleString()} ft</dd>`);
+      facts.push(['Elevation', `${Math.round(Number(s.elevation) * 3.281).toLocaleString()} ft`]);
     }
-    if (live && s.date_installed) {
-      rows.push(`<dt>Installed</dt><dd>${MCO.escapeHTML(fmtDate(s.date_installed))}</dd>`);
-    }
-    if (s.nwsli_id) rows.push(`<dt>NWSLI</dt><dd>${MCO.escapeHTML(s.nwsli_id)}</dd>`);
-    return rows;
+    if (live && s.date_installed) facts.push(['Installed', fmtDate(s.date_installed)]);
+    if (s.nwsli_id) facts.push(['NWSLI', s.nwsli_id]);
+    return facts;
   }
 
   // Station-first popup, used when the click lands on a dot rather than a cell.
@@ -1082,33 +1107,30 @@
   // question "what is this station", so it gets its own answer. It also works
   // for a station whose ace_grid names no drawn cell — the cell popup cannot,
   // because it keys entirely off cellById and simply returns nothing.
-  function stationPopupHTML(stationId) {
+  function stationPopupContent(stationId) {
     const s = stationById.get(stationId);
-    if (!s) return '';
+    if (!s) return null;
     const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
     const known = cell ? cellById.get(cell) : null;
     const cat = known ? known.cat : categoryFor(s.status, activeView);
-    const color = catColor(cat);
-    const pill = `<span class="pop-pill" style="background:${color};color:${readableOn(color)}">${MCO.escapeHTML(catLabel(cat))}</span>`;
     const live = cat === 'active';
 
     // A station whose ace_grid names a cell this map does not draw. Say so
     // rather than leaving a dot floating with no explanation — it means the
     // station registry and the ACE grid geometry disagree, which is worth
     // someone noticing rather than silently rendering.
-    const orphan = cell && !known
-      ? `<div class="pop-note"><strong>Cell ${MCO.escapeHTML(cell)}</strong> is not in this map's grid — the station registry and the ACE grid geometry disagree.</div>`
-      : '';
-    const sub = cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`;
-
-    return `
-      <div class="pop-title">${MCO.escapeHTML(s.name || s.station)}</div>
-      <div class="pop-sub">${MCO.escapeHTML(sub)}</div>
-      ${pill}
-      ${orphan}
-      <dl class="pop-facts">${stationFactRows(s, live).join('')}</dl>
-      ${live ? `<div class="pop-links"><a href="${DASH_URL(s.station)}" target="_blank" rel="noopener">Open dashboard →</a></div>` : ''}
-    `;
+    const notes = [];
+    if (cell && !known) {
+      const strong = document.createElement('strong');
+      strong.textContent = `Cell ${cell}`;
+      notes.push(note('pop-note', strong, " is not in this map's grid — the station registry and the ACE grid geometry disagree."));
+    }
+    return buildPopup({
+      title: s.name || s.station,
+      subtitle: cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`,
+      facts: stationFacts(s, live),
+      actions: live ? dashAction(s) : [],
+    }, cat, notes);
   }
 
   function openStationPopup(stationId, lngLat) {
@@ -1119,7 +1141,7 @@
     _selectedStation = stationId;
     const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
       .setLngLat(lngLat || [s.longitude, s.latitude])
-      .setHTML(stationPopupHTML(stationId))
+      .setDOMContent(stationPopupContent(stationId))
       .addTo(map);
     p.on('close', () => {
       if (_suppressNextPopupClose) { _suppressNextPopupClose = false; return; }
@@ -1142,7 +1164,7 @@
     _selectedCell = cellId;
     const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
       .setLngLat(lngLat || c.center)
-      .setHTML(popupHTML(cellId))
+      .setDOMContent(cellPopupContent(cellId))
       .addTo(map);
     p.on('close', () => {
       if (_suppressNextPopupClose) { _suppressNextPopupClose = false; return; }
