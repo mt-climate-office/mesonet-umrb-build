@@ -3,8 +3,11 @@
 
    Classic script, NOT a module: the kit ships mco-core.js / mco-map.js as
    plain globals (MCO, MCO.map), and a classic script keeps this file in the
-   same execution mode. Loaded at the end of <body>, after MapLibre and the
-   kit, so the DOM and every global it needs are already there.
+   same execution mode. Loaded at the end of <body>, after the kit, so the DOM
+   and the MCO globals are already there. MapLibre is NOT: since kit 0.8.0 it
+   is MapLibre 6 (ES modules only), imported by MCO.map.loadMapLibre(). The
+   UI below (theme, modal, search, legend) is wired first and never waits on
+   it; the map itself is built in initMap() once the library has arrived.
 
    Extracted from the inline <script type="module"> during the mco-web-style
    migration (kit @0.6.0) — an external file is what lets the page ship a
@@ -205,6 +208,7 @@
     iconSun:  document.getElementById('icon-sun'),
     iconMoon: document.getElementById('icon-moon'),
     onChange: () => {
+      if (!map) { pushState(); return; }   // library still loading: initMap reads the theme
       map.setStyle(MCO.map.cartoStyleUrl());
       map.once('style.load', () => {
         addCustomLayers();   // re-add — setStyle wipes our sources/layers
@@ -393,13 +397,9 @@
   }
 
   // ── Map init ─────────────────────────────────────────────────────────────
-  const map = new maplibregl.Map({
-    container: 'map',
-    style: MCO.map.cartoStyleUrl(),
-    ...MCO.map.initialCamera(urlParams),
-  });
-  MCO.map.addNavigation(map);                 // zoom buttons, no compass
-  MCO.map.addFitControl(map);
+  // Created by initMap() once MapLibre 6 has loaded (see Boot). Everything
+  // that touches the map before then checks for it.
+  let map = null;
 
   function emptyFC() { return { type: 'FeatureCollection', features: [] }; }
 
@@ -578,6 +578,7 @@
       applyAllFilters();
       renderLegend();
       refreshStamp();
+      MCO.ready();   // first meaningful state: the grid is shaded (idempotent)
 
       // Deep-link from ?cell=… / ?station=… . loadAll() only runs after the
       // map's 'load' handler, so the layers always exist by this point.
@@ -607,6 +608,7 @@
       rebuildCells();
       applyAllFilters();
       renderLegend();
+      MCO.ready();
     }
   }
   // Only consume the deep link once (initial load); Refresh shouldn't refly.
@@ -672,7 +674,7 @@
   }
 
   function rebuildCells() {
-    if (!map.getSource('cells') || !_gridsFC) return;
+    if (!map || !map.getSource('cells') || !_gridsFC) return;
 
     const cellFeatures = _gridsFC.features.map(f => {
       const cell = normalizeCell(f.properties.Cell);
@@ -879,7 +881,7 @@
   }
 
   function applyStationsVisibility() {
-    if (map.getLayer('stations-layer')) {
+    if (map && map.getLayer('stations-layer')) {
       map.setLayoutProperty('stations-layer', 'visibility', stationsOn ? 'visible' : 'none');
     }
   }
@@ -888,7 +890,7 @@
   // its outline and label, and the station dots sitting inside those cells, so
   // isolating a status leaves a coherent picture.
   function applyAllFilters() {
-    if (!map.getLayer('cells-fill')) return;
+    if (!map || !map.getLayer('cells-fill')) return;
     const catMatch = ['in', ['get', 'cat'], ['literal', [...currentCats()]]];
     for (const lid of ['cells-fill', 'cells-line', 'cells-label', 'stations-layer']) {
       if (map.getLayer(lid)) map.setFilter(lid, catMatch);
@@ -1232,27 +1234,6 @@
     }
   }
 
-  // ── Map event wiring ─────────────────────────────────────────────────────
-  // Keeps Montana filling the viewport: snaps back when the user zooms out past
-  // the fitted extent, and recomputes that floor after a resize settles (the
-  // zoom that fits MT is viewport-dependent).
-  const zoomFloor = MCO.map.installZoomFloor(map);
-
-  map.on('load', () => {
-    // Chips first: addCustomLayers() kicks off any saved overlay fetches, and
-    // those want a chip to hang their busy/error state on.
-    buildLayerChips();
-    addCustomLayers();
-    zoomFloor.refresh();
-    _mapReady = true;
-    // Kick off the data fetch once layers exist, so rebuildCells never lands
-    // before its source.
-    loadAll();
-  });
-
-  // Reflect every pan/zoom in the URL so the view is sharable
-  map.on('moveend', pushState);
-
   // ── URL state push ───────────────────────────────────────────────────────
   // Lists are space-joined; URLSearchParams encodes spaces as '+', giving tidy
   // URLs like overlays=counties+hucs. Enum-string values are lowercase.
@@ -1308,88 +1289,6 @@
     MCO.replaceUrlState(params);
   }
 
-  // ── Click handling ───────────────────────────────────────────────────────
-  // One dispatcher so a station dot and the cell beneath it can't double-fire.
-  map.on('click', (e) => {
-    const layers = ['stations-layer', 'cells-fill'].filter(l => map.getLayer(l));
-    const feats = layers.length ? map.queryRenderedFeatures(e.point, { layers }) : [];
-    if (feats.length === 0) { closePopup(); return; }
-    const f = feats.find(x => x.layer.id === 'stations-layer') || feats[0];
-    // A dot is a station, so it opens the station. Only a cell click resolves
-    // through cellById — which is also why a station whose ace_grid names no
-    // drawn cell used to be unclickable: the lookup failed and the handler bailed.
-    if (f.layer.id === 'stations-layer') {
-      openStationPopup(f.properties.station, f.geometry.coordinates.slice());
-      return;
-    }
-    const cell = normalizeCell(f.properties.cell);
-    if (!cellById.has(cell)) { closePopup(); return; }
-    openPopupFor(cell, e.lngLat);
-  });
-
-  // ── Hover tooltip ────────────────────────────────────────────────────────
-  const tooltipEl = document.getElementById('tooltip');
-  function showTooltip(f, e) {
-    let title, sub, line;
-    if (f.layer.id === 'stations-layer') {
-      // Hovering a dot asks about the station, and must work even when its
-      // ace_grid names no drawn cell.
-      const s = stationById.get(f.properties.station);
-      if (!s) return;
-      const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
-      const known = cell ? cellById.get(cell) : null;
-      title = s.name || s.station;
-      sub   = cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`;
-      line  = known
-        ? (known.ndawn ? 'Operational (NDAWN)' : catLabel(known.cat))
-        : `${catLabel(categoryFor(s.status, activeView))} · cell not in this grid`;
-    } else {
-      const cell = normalizeCell(f.properties.cell);
-      const c = cellById.get(cell);
-      if (!c) return;
-      const s = c.stationId ? stationById.get(c.stationId) : null;
-      title = s ? (s.name || s.station) : `Grid cell ${cell}`;
-      sub   = s ? `${s.station} · cell ${cell}` : cell;
-      line  = c.ndawn ? 'Operational (NDAWN)' : catLabel(c.cat);
-    }
-    tooltipEl.innerHTML =
-      `<span class="tooltip-name">${MCO.escapeHTML(title)}</span>` +
-      `<span class="tooltip-sub">${MCO.escapeHTML(sub)}</span>` +
-      `<span class="tooltip-line">${MCO.escapeHTML(line)}</span>`;
-    tooltipEl.classList.add('visible');
-    tooltipEl.style.left = `${e.originalEvent.clientX + 14}px`;
-    tooltipEl.style.top  = `${e.originalEvent.clientY + 14}px`;
-  }
-  function hideTooltip() { tooltipEl.classList.remove('visible'); }
-
-  // Single global mousemove dispatcher — does its own queryRenderedFeatures
-  // against the layer set. Avoids layer-scoped listeners, which can become
-  // detached when the style is swapped on theme toggle (MapLibre keeps the
-  // map-level handler stable across setStyle).
-  const HOVER_LAYERS = ['stations-layer', 'cells-fill'];
-  let _hovered = null;
-
-  map.on('mousemove', (e) => {
-    const layers = HOVER_LAYERS.filter(lid => map.getLayer(lid));
-    const feats = layers.length ? map.queryRenderedFeatures(e.point, { layers }) : [];
-    const f = feats.find(x => x.layer.id === 'stations-layer') || feats[0] || null;
-    if (f) {
-      map.getCanvas().style.cursor = 'pointer';
-      showTooltip(f, e);
-      _hovered = f.layer.id === 'stations-layer' ? f.properties.station : f.properties.cell;
-    } else if (_hovered !== null) {
-      map.getCanvas().style.cursor = '';
-      hideTooltip();
-      _hovered = null;
-    }
-  });
-  // Cursor + tooltip cleanup when the pointer leaves the map entirely.
-  map.getCanvas().addEventListener('mouseleave', () => {
-    map.getCanvas().style.cursor = '';
-    hideTooltip();
-    _hovered = null;
-  });
-
   // Global keyboard shortcuts: Esc closes things; / focuses search.
   // Escape is unaffected by ?kbd=off — it's a modifier-free key, but it only
   // acts on already-open UI, so it can't be misfired into.
@@ -1439,6 +1338,7 @@
 
   // ── Refresh (manual data reload) ─────────────────────────────────────────
   document.getElementById('btn-refresh').addEventListener('click', () => {
+    if (!_mapReady) return;   // the first load is still on its way
     refreshStampEl.textContent = 'loading…';
     loadAll();
   });
@@ -1452,7 +1352,7 @@
   const labelsBtn = document.getElementById('btn-labels');
   labelsBtn.setAttribute('aria-pressed', labelsOn ? 'true' : 'false');
   function applyLabelsVisibility() {
-    if (map.getLayer('cells-label')) {
+    if (map && map.getLayer('cells-label')) {
       map.setLayoutProperty('cells-label', 'visibility', labelsOn ? 'visible' : 'none');
     }
   }
@@ -1620,9 +1520,150 @@
     pushState();
   }
 
+  // ── Map construction (after MapLibre 6 has loaded) ─────────────────────
+  function initMap() {
+    map = new maplibregl.Map({
+      container: 'map',
+      style: MCO.map.cartoStyleUrl(),
+      ...MCO.map.initialCamera(urlParams),
+    });
+    MCO.map.addNavigation(map);                 // zoom buttons, no compass
+    MCO.map.addFitControl(map);
+
+    // ── Map event wiring ─────────────────────────────────────────────────────
+    // Keeps Montana filling the viewport: snaps back when the user zooms out past
+    // the fitted extent, and recomputes that floor after a resize settles (the
+    // zoom that fits MT is viewport-dependent).
+    const zoomFloor = MCO.map.installZoomFloor(map);
+
+    map.on('load', () => {
+      // Chips first: addCustomLayers() kicks off any saved overlay fetches, and
+      // those want a chip to hang their busy/error state on.
+      buildLayerChips();
+      addCustomLayers();
+      zoomFloor.refresh();
+      _mapReady = true;
+      // Kick off the data fetch once layers exist, so rebuildCells never lands
+      // before its source.
+      loadAll();
+    });
+
+    // Reflect every pan/zoom in the URL so the view is sharable
+    map.on('moveend', pushState);
+
+    // ── Click handling ───────────────────────────────────────────────────────
+    // One dispatcher so a station dot and the cell beneath it can't double-fire.
+    map.on('click', (e) => {
+      const layers = ['stations-layer', 'cells-fill'].filter(l => map.getLayer(l));
+      const feats = layers.length ? map.queryRenderedFeatures(e.point, { layers }) : [];
+      if (feats.length === 0) { closePopup(); return; }
+      const f = feats.find(x => x.layer.id === 'stations-layer') || feats[0];
+      // A dot is a station, so it opens the station. Only a cell click resolves
+      // through cellById — which is also why a station whose ace_grid names no
+      // drawn cell used to be unclickable: the lookup failed and the handler bailed.
+      if (f.layer.id === 'stations-layer') {
+        openStationPopup(f.properties.station, f.geometry.coordinates.slice());
+        return;
+      }
+      const cell = normalizeCell(f.properties.cell);
+      if (!cellById.has(cell)) { closePopup(); return; }
+      openPopupFor(cell, e.lngLat);
+    });
+
+    // ── Hover tooltip ────────────────────────────────────────────────────────
+    const tooltipEl = document.getElementById('tooltip');
+    function showTooltip(f, e) {
+      let title, sub, line;
+      if (f.layer.id === 'stations-layer') {
+        // Hovering a dot asks about the station, and must work even when its
+        // ace_grid names no drawn cell.
+        const s = stationById.get(f.properties.station);
+        if (!s) return;
+        const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
+        const known = cell ? cellById.get(cell) : null;
+        title = s.name || s.station;
+        sub   = cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`;
+        line  = known
+          ? (known.ndawn ? 'Operational (NDAWN)' : catLabel(known.cat))
+          : `${catLabel(categoryFor(s.status, activeView))} · cell not in this grid`;
+      } else {
+        const cell = normalizeCell(f.properties.cell);
+        const c = cellById.get(cell);
+        if (!c) return;
+        const s = c.stationId ? stationById.get(c.stationId) : null;
+        title = s ? (s.name || s.station) : `Grid cell ${cell}`;
+        sub   = s ? `${s.station} · cell ${cell}` : cell;
+        line  = c.ndawn ? 'Operational (NDAWN)' : catLabel(c.cat);
+      }
+      tooltipEl.innerHTML =
+        `<span class="tooltip-name">${MCO.escapeHTML(title)}</span>` +
+        `<span class="tooltip-sub">${MCO.escapeHTML(sub)}</span>` +
+        `<span class="tooltip-line">${MCO.escapeHTML(line)}</span>`;
+      tooltipEl.classList.add('visible');
+      tooltipEl.style.left = `${e.originalEvent.clientX + 14}px`;
+      tooltipEl.style.top  = `${e.originalEvent.clientY + 14}px`;
+    }
+    function hideTooltip() { tooltipEl.classList.remove('visible'); }
+
+    // Single global mousemove dispatcher — does its own queryRenderedFeatures
+    // against the layer set. Avoids layer-scoped listeners, which can become
+    // detached when the style is swapped on theme toggle (MapLibre keeps the
+    // map-level handler stable across setStyle).
+    const HOVER_LAYERS = ['stations-layer', 'cells-fill'];
+    let _hovered = null;
+
+    map.on('mousemove', (e) => {
+      const layers = HOVER_LAYERS.filter(lid => map.getLayer(lid));
+      const feats = layers.length ? map.queryRenderedFeatures(e.point, { layers }) : [];
+      const f = feats.find(x => x.layer.id === 'stations-layer') || feats[0] || null;
+      if (f) {
+        map.getCanvas().style.cursor = 'pointer';
+        showTooltip(f, e);
+        _hovered = f.layer.id === 'stations-layer' ? f.properties.station : f.properties.cell;
+      } else if (_hovered !== null) {
+        map.getCanvas().style.cursor = '';
+        hideTooltip();
+        _hovered = null;
+      }
+    });
+    // Cursor + tooltip cleanup when the pointer leaves the map entirely.
+    map.getCanvas().addEventListener('mouseleave', () => {
+      map.getCanvas().style.cursor = '';
+      hideTooltip();
+      _hovered = null;
+    });
+
+  }
+
+  // The library failed to import (offline, CDN down, SRI mismatch). The rest
+  // of the page is already wired; say so persistently, with a retry —
+  // loadMapLibre() lets a later call try the import again.
+  function onMapLibreFail(err) {
+    console.error(err);
+    MCO.ready();
+    const n = MCO.notice({
+      tone: 'danger', text: 'The map library failed to load.',
+      container: document.getElementById('map-container'), place: 'over',
+      action: { label: 'Retry', onClick: () => { n.close(); bootMap(); } },
+    });
+  }
+  function bootMap() {
+    MCO.map.loadMapLibre().then(initMap, onMapLibreFail).catch((err) => {
+      // The library loaded but the map could not start — MapLibre 6 needs
+      // WebGL2 and throws GPUInitializationError without it.
+      console.error(err);
+      MCO.ready();
+      MCO.notice({
+        tone: 'danger', text: 'The map could not start. It needs a browser with WebGL2.',
+        container: document.getElementById('map-container'), place: 'over',
+      });
+    });
+  }
+
   // ── Boot ─────────────────────────────────────────────────────────────────
   // The map's 'load' event drives layer creation and the data fetch — see
-  // map.on('load') above.
+  // map.on('load') in initMap().
   renderLegend();
+  bootMap();
 
 })();
