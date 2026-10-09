@@ -436,6 +436,19 @@
 </table>
 </main>
 
+<!-- Detail sheet (MCO.initSheet): on compact the cell/station detail opens
+     here instead of an anchored popup. Its body is the same popupContent()
+     the popup shows; app.js fills the title and body. Not a dialog: it is not
+     modal at peek, and the kit makes the rest inert only at full. -->
+<section class="mco-sheet" id="detail-sheet" aria-labelledby="detail-sheet-title" data-state="closed" hidden>
+  <div class="mco-sheet-head">
+    <button type="button" class="mco-sheet-grip" aria-label="Expand details" aria-expanded="false"></button>
+    <h2 class="mco-sheet-title" id="detail-sheet-title" tabindex="-1"></h2>
+    <button type="button" class="modal-close" data-close-sheet aria-label="Close details">×</button>
+  </div>
+  <div class="mco-sheet-body"></div>
+</section>
+
 <!-- Tooltip is purely visual: anchored to cursor, no focusable trigger, so it
      would never be surfaced to a screen reader. Screen-reader notifications
      go through MCO.announce, whose live regions the kit creates at load; the

@@ -1147,25 +1147,118 @@
     }, cat, notes);
   }
 
+  // ── Detail: anchored popup on desktop, bottom sheet on compact ─────────
+  // One selection (a cell or a station, each with its own URL parameter) and
+  // one surface showing it. Above the compact breakpoint that is a MapLibre
+  // popup anchored to the feature; on compact it is the kit's bottom sheet
+  // (MCO.initSheet, kit 0.9.0) with the SAME popupContent() body — an
+  // anchored 320px popup covers most of a phone map and its tip points at a
+  // cell the finger is on top of. The sheet opens at peek (title, sub, status
+  // pill), drags or steps (the grip) to full, and closes on ×, Esc or a drag
+  // down; the map stays usable at peek.
+  const detailSheetEl = document.getElementById('detail-sheet');
+  const sheetTitleEl  = document.getElementById('detail-sheet-title');
+  const sheetBodyEl   = detailSheetEl.querySelector('.mco-sheet-body');
+  let _detail = null;          // 'popup' | 'sheet' | null — what is showing
+  let _detailClosing = false;  // a programmatic close: not the user dismissing it
+  const sheet = MCO.initSheet({
+    sheet: detailSheetEl,
+    fallbackFocus: document.getElementById('map'),
+    onState: (st) => {
+      if (st !== 'closed') return;
+      if (_detail === 'sheet' && !_detailClosing) {
+        _detail = null;
+        clearSelection();
+      }
+      // The kit restores focus to the opener. Opened from a deep link, the
+      // opener is <body> (the kit's overlay takes document.activeElement
+      // when no opener is given, so its fallbackFocus never applies), and
+      // focus stays on <body> or on the now-hidden grip. Land on the map
+      // canvas instead (WCAG 2.4.3).
+      setTimeout(() => {
+        const a = document.activeElement;
+        if (map && !_detail && (!a || a === document.body || detailSheetEl.contains(a))) map.getCanvas().focus();
+      }, 0);
+    },
+  });
+
+  function detailContent() {
+    if (_selectedCell) return cellPopupContent(_selectedCell);
+    if (_selectedStation) return stationPopupContent(_selectedStation);
+    return null;
+  }
+  // The sheet has its own title element, so the popup body's title moves
+  // there; the status pill marks the peek height.
+  function fillSheet(frag) {
+    const root = frag.querySelector('.mco-popup');
+    const t = root.querySelector('.mco-popup-title');
+    sheetTitleEl.textContent = t ? t.textContent : '';
+    if (t) t.remove();
+    const pill = root.querySelector('.pop-pill');
+    if (pill) pill.dataset.peek = '';
+    sheetBodyEl.replaceChildren(frag);
+  }
+  // Re-render whatever is open (a theme switch recolors the pill).
+  function refreshDetail() {
+    const content = detailContent();
+    if (!content) return;
+    if (_detail === 'popup' && _popup) _popup.setDOMContent(content);
+    else if (_detail === 'sheet') fillSheet(content);
+  }
+
+  // Take down the current surface without touching the selection or the URL.
+  function dismissDetail(restoreFocus) {
+    _detailClosing = true;
+    if (_popup) {
+      // Removing a popup that holds focus drops it to <body>; hand it to the
+      // map instead (WCAG 2.4.3).
+      const had = _popup.getElement().contains(document.activeElement);
+      _popup.remove();
+      _popup = null;
+      if (had && restoreFocus) map.getCanvas().focus();
+    }
+    if (_detail === 'sheet') sheet.close({ restoreFocus: !!restoreFocus });
+    _detail = null;
+    _detailClosing = false;
+  }
+
+  function clearSelection() {
+    if (!_selectedCell && !_selectedStation) return;
+    _selectedCell = null;
+    _selectedStation = null;
+    pushState();
+  }
+
+  function showDetail(lngLat) {
+    const content = detailContent();
+    if (!content) return;
+    if (MCO.viewport.isCompact()) {
+      fillSheet(content);
+      _detail = 'sheet';
+      sheet.open('peek', { opener: document.activeElement });
+      return;
+    }
+    const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
+      .setLngLat(lngLat)
+      .setDOMContent(content)
+      .addTo(map);
+    p.on('close', () => {
+      if (_detailClosing || _popup !== p) return;
+      _popup = null;
+      _detail = null;
+      clearSelection();
+    });
+    _popup = p;
+    _detail = 'popup';
+  }
+
   function openStationPopup(stationId, lngLat) {
     const s = stationById.get(stationId);
     if (!s) return;
-    if (_popup) { _suppressNextPopupClose = true; _popup.remove(); _popup = null; }
+    dismissDetail(false);
     _selectedCell = null;
     _selectedStation = stationId;
-    const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
-      .setLngLat(lngLat || [s.longitude, s.latitude])
-      .setDOMContent(stationPopupContent(stationId))
-      .addTo(map);
-    p.on('close', () => {
-      if (_suppressNextPopupClose) { _suppressNextPopupClose = false; return; }
-      if (_popup === p) {
-        _popup = null;
-        _selectedStation = null;
-        pushState();
-      }
-    });
-    _popup = p;
+    showDetail(lngLat || [s.longitude, s.latitude]);
     announceStation(stationId);
     pushState();
   }
@@ -1173,39 +1266,20 @@
   function openPopupFor(cellId, lngLat) {
     const c = cellById.get(cellId);
     if (!c) return;
-    if (_popup) { _suppressNextPopupClose = true; _popup.remove(); _popup = null; }
+    dismissDetail(false);
     _selectedStation = null;
     _selectedCell = cellId;
-    const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
-      .setLngLat(lngLat || c.center)
-      .setDOMContent(cellPopupContent(cellId))
-      .addTo(map);
-    p.on('close', () => {
-      if (_suppressNextPopupClose) { _suppressNextPopupClose = false; return; }
-      if (_popup === p) {
-        _popup = null;
-        _selectedCell = null;
-        pushState();
-      }
-    });
-    _popup = p;
+    showDetail(lngLat || c.center);
     announceCell(cellId);
     pushState();
   }
 
-  // Track whether the next Popup `close` event was triggered programmatically
-  // (so we don't pushState for an open-replace; the new popup pushes its own).
-  let _suppressNextPopupClose = false;
+  // The user closed the detail (Esc, an empty-map click): take it down and
+  // clear the selection.
   function closePopup() {
-    if (!_popup) return;
-    _suppressNextPopupClose = true;
-    _popup.remove();
-    _popup = null;
-    if (_selectedCell || _selectedStation) {
-      _selectedCell = null;
-      _selectedStation = null;
-      pushState();
-    }
+    if (!_detail) return;
+    dismissDetail(true);
+    clearSelection();
   }
 
   // ── URL state push ───────────────────────────────────────────────────────
@@ -1467,8 +1541,7 @@
     // Swatch and pill colors are composited against the basemap, so they
     // have to be regenerated rather than just left alone.
     renderLegend();
-    if (_popup && _selectedCell) _popup.setDOMContent(cellPopupContent(_selectedCell));
-    else if (_popup && _selectedStation) _popup.setDOMContent(stationPopupContent(_selectedStation));
+    refreshDetail();
   }
 
   // ── Map construction (after MapLibre 6 has loaded) ─────────────────────
