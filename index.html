@@ -283,18 +283,31 @@
        are hidden visually, not removed, so the <h1> outline survives). This map
        adds only its own controls break.
 
-       Below ~1200px the primary controls (search + layer chips) drop to a
-       dedicated second row; row 1 keeps branding on the left and
-       refresh/labels/theme/info on the right. CSS `order` swaps the visual
-       position without disturbing tab order — search stays keyboard-reachable
-       early via the / shortcut. 1200 rather than the kit's 1060 because this
-       bar carries chips, a search field and four nav buttons. */
-    @media (max-width: 1200px) {
-      .nav-meta  { order: 1; }
-      .controls  { order: 2; flex-basis: 100%; margin-left: 0; }
+       Ladder rule (Kyle, 2026-10-09): a bar that can't fit one row at the
+       1060 rung sheds at the 1400 rung and stays on the ladder — no
+       off-ladder 1200 break. This bar needs ~1220px on one row with every
+       chip pressed, so at ≤1400px it sheds ~180px:
+       - the refresh stamp goes icon-only: the live dot stays, the text is
+         visually hidden but still read by AT, and the time is the
+         wrapper's title (app.js keeps it current);
+       - the search field narrows 220 → 160px (back to 220 on the second
+         row at 641–1060, where it has the room).
+       That keeps one row from 1061 to 1440. At ≤1060 the primary controls
+       (search + chips) drop to a dedicated second row; CSS `order` swaps the
+       visual position without disturbing tab order. */
+    @media (max-width: 1400px) {
+      #refresh-stamp {
+        position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+        overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+      }
+      #search-input { width: 160px; }
     }
     @media (max-width: 1060px) {
-      .nav-meta { gap: 0.3rem; }
+      .nav-meta  { order: 1; gap: 0.3rem; }
+      .controls  { order: 2; flex-basis: 100%; margin-left: 0; }
+    }
+    @media (min-width: 641px) and (max-width: 1060px) {
+      #search-input { width: 220px; }
     }
     /* At ≤640px the kit collapses the search field into its disclosure button,
        so the field's own width rules no longer apply: it is either display:none

@@ -186,6 +186,9 @@
     // network: "loaded 14:05" has to mean the same clock to a field tech in
     // Bozeman and a collaborator in DC (HOUSE-STYLE § time).
     refreshStampEl.textContent = `loaded ${MCO.hhmmNowMT()} MT`;
+    // At ≤1400px the stamp is icon-only (index.html § Responsive): the
+    // wrapper's title carries the time for pointer users.
+    refreshStampEl.parentElement.title = `Last refreshed: ${refreshStampEl.textContent}`;
   }
 
   // ── Theme ────────────────────────────────────────────────────────────────
