@@ -467,7 +467,7 @@
 
     <div class="info-section">
       <h3>What this shows</h3>
-      <p>The Upper Missouri River Basin is divided into <strong>ACE grid cells</strong>, each sized to hold one Mesonet station. A cell is shaded by how far along its station is: <strong>operational</strong>, <strong>scheduled</strong> for a given install year, <strong>under construction</strong>, or still <strong>available</strong>. Orange dots mark the actual station locations. Cell assignments are provisional and change as siting work proceeds.</p>
+      <p>The Upper Missouri River Basin is divided into <strong>ACE grid cells</strong>, each sized to hold one Mesonet station. A cell is shaded by how far along its station is: <strong>operational</strong>, <strong>scheduled</strong> for a given install year, <strong>under construction</strong>, or still <strong>available</strong>. Dots — white on the dark themes, near-black on the light one — mark the actual station locations. Cell assignments are provisional and change as siting work proceeds.</p>
     </div>
 
     <div class="info-section">
@@ -507,6 +507,10 @@
      recomputing them hard-fails in the browser, which is the point. -->
 <script src="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.11.2/core/mco-core.js"
         integrity="sha384-b4r3+tK/yiZ4TNEllSsbDX3qW0NhcHDsF2iPzUWunUc2vNf1qlq9t9qo2YWgoZiK"
+        crossorigin="anonymous"></script>
+<!-- mco-palette.js before mco-map.js: markerPaint() reads its network registry. -->
+<script src="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.11.2/palette/mco-palette.js"
+        integrity="sha384-P+8vdCR12oZ388lO/orPRnm6Tcz69x6mhN32l7AWP7j8S7KCNijXDZrmYjWuXm8J"
         crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.11.2/map/mco-map.js"
         integrity="sha384-tmDqtqi4yYiDHOxkZikwzXF3Lpkb63b0Tu6K7jeCpU9gJkPB2GbpFHLasGHka6zP"

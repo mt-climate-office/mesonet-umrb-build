@@ -518,12 +518,21 @@
   // or, if warm, collide with the ramp's yellow end under deuteranopia (ΔE ~3).
   // Pure lightness contrast separates it from every category for every kind of
   // color vision (worst case ΔE 26).
+  //
+  // Shape and size come from the kit's marker paint (MCO.map.markerPaint,
+  // kit 0.9.0): every UMRB station is a Mesonet HydroMet station, a filled
+  // circle. Its colors are read from tokens at paint time instead of the
+  // hard-coded pairs this used to carry: the fill is this page's --c-station
+  // and the edge is --bg-deep, the basemap-dark (or -light) opposite of the
+  // fill. The kit's own edge (--dot-stroke) is white on the dark themes —
+  // right for a colored network dot, invisible around a white one.
   function stationPaint() {
     return {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 2.5, 7, 4, 10, 6, 14, 8],
-      'circle-color':        isDark() ? '#ffffff' : '#0f1115',
-      'circle-stroke-color': isDark() ? '#0e1116' : '#ffffff',
-      'circle-stroke-width': 1.2,
+      ...MCO.map.markerPaint('hydromet', {
+        fill:   MCO.cssVar('--c-station'),
+        radius: ['interpolate', ['linear'], ['zoom'], 4, 2.5, 7, 4, 10, 6, 14, 8],
+      }),
+      'circle-stroke-color': MCO.cssVar('--bg-deep'),
       'circle-opacity': 0.95,
     };
   }
