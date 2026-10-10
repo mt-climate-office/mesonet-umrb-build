@@ -28,14 +28,6 @@
   const GRIDS_URL  = 'data/mt_grids_simple.geojson';
   const STATE_URL  = 'data/mt_state_simple.geojson';
 
-  // Initial fit (a touch padded around Montana's actual extent). Snapback on
-  // zoom-out uses these same bounds — matching the maintenance map.
-  // The Montana extent and its fit options are kit defaults
-  // (MCO.map.MT_FIT_BOUNDS / MCO.map.FIT_OPTS); aliased here for the few direct
-  // fitBounds/cameraForBounds calls below rather than redeclared.
-  const MT_FIT_BOUNDS = MCO.map.MT_FIT_BOUNDS;
-  const FIT_OPTS      = MCO.map.FIT_OPTS;
-
   const SEARCH_FLY_ZOOM  = 9;      // zoom when search/deep-link flies to a cell
   const SEARCH_FLY_SPEED = 1.4;
   const CELL_LABEL_MINZOOM    = 6; // grid cell IDs
@@ -67,6 +59,14 @@
   //
   // So they get one ramp rather than seven hand-picked hues: Fabio Crameri's
   // `roma`, from the Scientific colour maps, sampled at seven even positions.
+  // The hues are the kit's roma — MCO.palette 'roma' (kit 0.12.0, Crameri v8,
+  // 11 stops) — read at t = stage/6, with "Build in progress" at t = 0.75
+  // (below). The hexes in VIEWS are derived OFFLINE, because the lightness
+  // remap below has no runtime equivalent in the kit; they stay hard-coded.
+  // Checked against MCO.palette.colorAt('roma', t) at those positions (kit
+  // 0.12.0): OKLab hue agrees within 1.3° for every stage in both themes,
+  // except 'Available cell' on light (3.1°, the deepest point of the remap).
+  // Only lightness (and with it chroma) moves.
   // roma is perceptually uniform (adjacent steps differ by an equal, visible
   // amount), readable in grayscale, and CVD-tested by construction — worst-case
   // pairwise ΔE in CAM02-UCS is 14.6 (light) / 16.0 (dark) under simulated
@@ -152,31 +152,31 @@
   const searchInput    = document.getElementById('search-input');
   const searchDropdown = document.getElementById('search-dropdown');
   const infoModal      = document.getElementById('info-modal');
-  const dataBannerEl   = document.getElementById('data-banner');
   const brandFlagEl    = document.getElementById('brand-flag');
 
-  // Push a sentence to the aria-live region so screen-reader users hear what a
-  // popup opened via click, search, or deep-link contains.
-  const srAnnounceEl = document.getElementById('sr-announce');
+  // Say what a popup opened via click, search, or deep-link contains, through
+  // the kit's one announcer (MCO.announce, kit 0.8.0): its live regions exist
+  // from load, and it clears before setting so reopening the same cell is
+  // read again — the hand-made #sr-announce region did neither.
   function announceCell(cellId) {
     const c = cellById.get(cellId);
-    if (!c || !srAnnounceEl) return;
+    if (!c) return;
     const label = catLabel(c.cat);
     const s = c.stationId ? stationById.get(c.stationId) : null;
-    srAnnounceEl.textContent = s
+    MCO.announce(s
       ? `Cell ${cellId}, ${label}, ${s.name}.`
-      : `Cell ${cellId}, ${label}.`;
+      : `Cell ${cellId}, ${label}.`);
   }
   // Same, for a popup opened on a station dot rather than a cell.
   function announceStation(stationId) {
     const s = stationById.get(stationId);
-    if (!s || !srAnnounceEl) return;
+    if (!s) return;
     const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
     const known = cell ? cellById.get(cell) : null;
     const label = catLabel(known ? known.cat : categoryFor(s.status, activeView));
-    srAnnounceEl.textContent = known
+    MCO.announce(known
       ? `${s.name || s.station}, ${label}, cell ${cell}.`
-      : `${s.name || s.station}, ${label}, no cell in this grid.`;
+      : `${s.name || s.station}, ${label}, no cell in this grid.`);
   }
 
   function fmtDate(iso) {
@@ -194,6 +194,9 @@
     // network: "loaded 14:05" has to mean the same clock to a field tech in
     // Bozeman and a collaborator in DC (HOUSE-STYLE § time).
     refreshStampEl.textContent = `loaded ${MCO.hhmmNowMT()} MT`;
+    // At ≤1400px the stamp is icon-only (index.html § Responsive): the
+    // wrapper's title carries the time for pointer users.
+    refreshStampEl.parentElement.title = `Last refreshed: ${refreshStampEl.textContent}`;
   }
 
   // ── Theme ────────────────────────────────────────────────────────────────
@@ -203,22 +206,19 @@
   // owns that decision.
   const isDark = () => MCO.getTheme() !== 'light';
 
+  // Three states (kit 0.10.0): dark → light → high contrast → dark, so high
+  // contrast is reachable from the page, not only from ?theme=. The icon and
+  // the aria-label name the theme a press switches TO.
   MCO.initThemeToggle({
     button:   document.getElementById('btn-theme'),
     iconSun:  document.getElementById('icon-sun'),
     iconMoon: document.getElementById('icon-moon'),
+    iconContrast: document.getElementById('icon-contrast'),
+    cycle: true,
     onChange: () => {
-      if (!map) { pushState(); return; }   // library still loading: initMap reads the theme
-      map.setStyle(MCO.map.cartoStyleUrl());
-      map.once('style.load', () => {
-        addCustomLayers();   // re-add — setStyle wipes our sources/layers
-                             // (it also re-adds the active overlays)
-        rebuildCells();      // repopulate the now-empty cells source
-        // Swatch and pill colors are composited against the basemap, so they have
-        // to be regenerated rather than just left alone.
-        renderLegend();
-        if (_popup && _selectedCell) _popup.setHTML(popupHTML(_selectedCell));
-      });
+      // The library still loading: initMap reads the theme when it runs.
+      // Otherwise swap the basemap; onStyleLoad() puts our layers back.
+      if (map) map.setStyle(MCO.map.cartoStyleUrl());
       pushState();
     },
   });
@@ -227,6 +227,20 @@
   // The kit owns backdrop-click, [data-close-modal] delegation, and
   // opener-captured focus restore.
   const btnInfo = document.getElementById('btn-info');
+  // On the landscape-phone rail the info button sits in the drawer: close the
+  // drawer before the dialog opens (capture, so it runs first), and when the
+  // dialog closes onto the now-hidden button, land on the rail's menu button.
+  btnInfo.addEventListener('click', () => {
+    if (rail.isOpen()) rail.close({ restoreFocus: false });
+  }, true);
+  infoModal.addEventListener('close', () => {
+    setTimeout(() => {
+      const a = document.activeElement;
+      if (rail.isRail() && (!a || a === document.body || !a.getClientRects().length)) {
+        document.getElementById('btn-rail-menu').focus();
+      }
+    }, 0);
+  });
   const infoModalCtl = MCO.initInfoModal({ dialog: infoModal, trigger: btnInfo });
 
   // Mark the intro seen AT OPEN, not on close. Someone who reads the modal and
@@ -357,14 +371,17 @@
     return toHex(c.map((v, i) => v * a + bg[i] * (1 - a)));
   }
   // Pills are solid, so their label has to flip between light and dark text
-  // depending on the fill — white on the amber "build in progress" is 1.75:1.
-  // Picking whichever has more contrast clears WCAG AA for every color in the
-  // palette (worst case 4.54:1).
+  // depending on the fill. Picking whichever of white / black has more
+  // contrast clears WCAG 1.4.3 AA for every fill in both views and every
+  // theme (worst case 4.73:1). The dark option used to be #1a1a2e, which
+  // left three mid-lightness fills under 4.5:1 — "Pending 2027" on dark
+  // (#b2742a, 4.41:1), "Build in progress" on light (#0481ab, 4.44:1) and
+  // "Station structure complete" on dark (#3887c5, 4.42:1). Found by axe
+  // on the orphan-station popup; no earlier scan opened a popup.
   function readableOn(hex) {
     const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
     const l = relLum(parseHex(hex));
-    return ratio(l, relLum([255, 255, 255])) >= ratio(l, relLum([26, 26, 46]))
-      ? '#ffffff' : '#1a1a2e';
+    return ratio(l, 1) >= ratio(l, 0) ? '#ffffff' : '#000000';
   }
 
   // ── Layer toggles (station dots + reference overlays) ─────────────────────
@@ -523,12 +540,21 @@
   // or, if warm, collide with the ramp's yellow end under deuteranopia (ΔE ~3).
   // Pure lightness contrast separates it from every category for every kind of
   // color vision (worst case ΔE 26).
+  //
+  // Shape and size come from the kit's marker paint (MCO.map.markerPaint,
+  // kit 0.9.0): every UMRB station is a Mesonet HydroMet station, a filled
+  // circle. Its colors are read from tokens at paint time instead of the
+  // hard-coded pairs this used to carry: the fill is this page's --c-station
+  // and the edge is --bg-deep, the basemap-dark (or -light) opposite of the
+  // fill. The kit's own edge (--dot-stroke) is white on the dark themes —
+  // right for a colored network dot, invisible around a white one.
   function stationPaint() {
     return {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 2.5, 7, 4, 10, 6, 14, 8],
-      'circle-color':        isDark() ? '#ffffff' : '#0f1115',
-      'circle-stroke-color': isDark() ? '#0e1116' : '#ffffff',
-      'circle-stroke-width': 1.2,
+      ...MCO.map.markerPaint('hydromet', {
+        fill:   MCO.cssVar('--c-station'),
+        radius: ['interpolate', ['linear'], ['zoom'], 4, 2.5, 7, 4, 10, 6, 14, 8],
+      }),
+      'circle-stroke-color': MCO.cssVar('--bg-deep'),
       'circle-opacity': 0.95,
     };
   }
@@ -570,7 +596,12 @@
       const rows = Array.isArray(status) ? status : [];
       dataUnavailable = rows.length === 0;
       stations = rows;
-      dataBannerEl.hidden = !dataUnavailable;
+      if (dataUnavailable) {
+        showDataNotice('warning', 'Station status unavailable',
+          'Showing the grid without status.');
+      } else {
+        closeDataNotice();
+      }
 
       indexData();
       populateSearch();
@@ -600,8 +631,7 @@
     } catch (err) {
       console.error(err);
       dataUnavailable = true;
-      dataBannerEl.hidden = false;
-      MCO.showToast(`Error loading data: ${err.message}`);
+      showDataNotice('danger', 'Error', `The map data failed to load (${err.message}).`);
       // Still render whatever we have — an unshaded grid is better than nothing.
       indexData();
       populateSearch();
@@ -613,6 +643,27 @@
   }
   // Only consume the deep link once (initial load); Refresh shouldn't refly.
   let _deepLinkConsumed = false;
+
+  // A failed or empty load is a persistent kit notice over the map (kit
+  // 0.8.0, .mco-notice) with a Retry, rather than the page's own amber card:
+  // the tone word is visible text, it is announced once (assertively — a
+  // load failure), and it can be dismissed. One at a time; a good load
+  // closes it.
+  let _dataNotice = null;
+  function closeDataNotice() {
+    if (_dataNotice) { const n = _dataNotice; _dataNotice = null; n.close(); }
+  }
+  function showDataNotice(tone, toneLabel, text) {
+    closeDataNotice();
+    const n = MCO.notice({
+      tone, toneLabel, text,
+      container: document.getElementById('map-container'), place: 'over',
+      politeness: 'assertive',
+      action: { label: 'Retry', onClick: () => { closeDataNotice(); refreshData(); } },
+      onClose: () => { if (_dataNotice === n) _dataNotice = null; },
+    });
+    _dataNotice = n;
+  }
 
   // Build the station lookup and the cell → status join in one pass.
   function indexData() {
@@ -839,7 +890,7 @@
   }
 
   // ── Layer chip UI ────────────────────────────────────────────────────────
-  function chipEl(key) { return layerFiltersEl.querySelector(`.chip[data-layer="${key}"]`); }
+  function chipEl(key) { return layerFiltersEl.querySelector(`.mco-chip[data-layer="${key}"]`); }
   function setChipBusy(key, busy) {
     const el = chipEl(key);
     if (el) el.setAttribute('aria-busy', busy ? 'true' : 'false');
@@ -858,7 +909,7 @@
     for (const e of entries) {
       const chip = document.createElement('button');
       chip.type = 'button';
-      chip.className = 'chip';
+      chip.className = 'mco-chip';
       chip.dataset.layer = e.key;
       chip.textContent = e.label;
       chip.setAttribute('aria-pressed', e.pressed() ? 'true' : 'false');
@@ -899,111 +950,49 @@
   }
 
   // Show a small callout when the filter state hides everything, so the user
-  // knows the empty map is intentional and how to recover.
+  // knows the empty map is intentional and how to recover. The kit's
+  // .mco-empty shell, floated over the map (data-place="over"); filled with
+  // DOM nodes, not an HTML string.
   const emptyStateEl = document.getElementById('empty-state');
   function updateEmptyState() {
     if (!emptyStateEl || cellById.size === 0) {
       if (emptyStateEl) emptyStateEl.hidden = true;
       return;
     }
-    let msg = null;
+    emptyStateEl.textContent = '';
     if (currentCats().size === 0) {
-      msg = '<strong>All legend categories hidden.</strong> Click a legend row to show cells.';
+      const strong = document.createElement('strong');
+      strong.textContent = 'All legend categories hidden.';
+      emptyStateEl.append(strong, ' Click a legend row to show cells.');
     } else if (![...cellById.values()].some(c => currentCats().has(c.cat))) {
-      msg = 'No grid cells match the current filters.';
+      emptyStateEl.textContent = 'No grid cells match the current filters.';
     }
-    if (msg) {
-      emptyStateEl.innerHTML = `<div class="empty-state-card">${msg}</div>`;
-      emptyStateEl.hidden = false;
-    } else {
-      emptyStateEl.hidden = true;
-    }
+    emptyStateEl.hidden = !emptyStateEl.textContent;
   }
 
-  // ── Search (custom listbox dropdown + flyTo + popup) ─────────────────────
-  // Custom rather than native <datalist> so the popup honors the app theme.
-  let _searchSorted = [];
-  let _activeSearchIndex = -1;
+  // ── Search (MCO.initSearchBox + flyTo + popup) ──────────────────────────
+  // The kit's APG combobox (kit 0.8.0) on the dashboard's model: ranking,
+  // aria-activedescendant, a disabled "No matches" option, polite result
+  // counts, and Esc that closes, then clears, then passes through. This page
+  // and the maintenance map carried near-identical hand-rolled copies.
+  // Items are the stations a search can land on; a station's cell is a
+  // keyword, so typing "G-12" finds the station in that cell.
+  let _searchItems = [];
   const SEARCH_MAX_RESULTS = 8;
 
   function populateSearch() {
-    _searchSorted = stations
+    _searchItems = stations
       .filter(s => s && s.station && s.status !== 'decommissioned')
-      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  }
-
-  function matchScore(s, q) {
-    const n = (s.name || '').toLowerCase();
-    const id = (s.station || '').toLowerCase();
-    const cell = (s.ace_grid || '').toLowerCase();
-    if (n === q || id === q || cell === q) return 0;
-    if (n.startsWith(q))  return 1;
-    if (id.startsWith(q)) return 2;
-    if (cell.startsWith(q)) return 3;
-    if (n.includes(q))    return 4;
-    if (id.includes(q))   return 5;
-    return Infinity;
-  }
-
-  function showSearchDropdown(rawQuery) {
-    const q = rawQuery.trim().toLowerCase();
-    if (!q) { hideSearchDropdown(); return; }
-    const matches = _searchSorted
-      .map(s => ({ s, score: matchScore(s, q) }))
-      .filter(m => m.score < Infinity)
-      .sort((a, b) => a.score - b.score || (a.s.name || '').localeCompare(b.s.name || ''))
-      .slice(0, SEARCH_MAX_RESULTS)
-      .map(m => m.s);
-    searchDropdown.innerHTML = '';
-    if (matches.length === 0) {
-      const li = document.createElement('li');
-      li.className = 'empty';
-      li.setAttribute('aria-disabled', 'true');
-      li.textContent = `No stations match "${rawQuery.trim()}"`;
-      searchDropdown.appendChild(li);
-      searchDropdown.hidden = false;
-      searchInput.setAttribute('aria-expanded', 'true');
-      _activeSearchIndex = -1;
-      return;
-    }
-    for (const s of matches) {
-      const li = document.createElement('li');
-      li.setAttribute('role', 'option');
-      li.dataset.stationId = s.station;
-      li.id = `search-opt-${s.station}`;
-      const name = document.createElement('span');
-      name.className = 'search-name';
-      name.textContent = s.name || s.station;
-      const meta = document.createElement('span');
-      meta.className = 'search-meta';
-      meta.textContent = `${s.station} · ${s.ace_grid ? normalizeCell(s.ace_grid) : 'no cell'}`;
-      li.appendChild(name);
-      li.appendChild(meta);
-      // mousedown (not click) so the option commits before the input's blur.
-      li.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        selectStation(s.station);
+      .map((s) => {
+        const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
+        return {
+          id: s.station,
+          label: s.name || s.station,
+          keywords: cell ? [cell] : [],
+          meta: `${s.station} · ${cell || 'no cell'}`,
+        };
       });
-      searchDropdown.appendChild(li);
-    }
-    searchDropdown.hidden = false;
-    searchInput.setAttribute('aria-expanded', 'true');
-    _activeSearchIndex = -1;
-    searchInput.removeAttribute('aria-activedescendant');
-  }
-
-  function hideSearchDropdown() {
-    searchDropdown.hidden = true;
-    searchInput.setAttribute('aria-expanded', 'false');
-    _activeSearchIndex = -1;
-    searchInput.removeAttribute('aria-activedescendant');
-  }
-
-  function selectStation(stationId) {
-    hideSearchDropdown();
-    searchInput.value = '';
-    searchInput.blur();
-    flyToStation(stationId);
+    if (searchBox) searchBox.refresh();
   }
 
   // Searching a station lands on the STATION, not on its cell — the two only
@@ -1032,31 +1021,41 @@
     map.once('moveend', () => openStationPopup(stationId));
   }
 
-  function setActiveSearchItem(idx) {
-    const items = searchDropdown.querySelectorAll('li');
-    if (!items.length) return;
-    if (idx < 0)             idx = items.length - 1;
-    if (idx >= items.length) idx = 0;
-    _activeSearchIndex = idx;
-    items.forEach((it, i) => it.classList.toggle('active', i === idx));
-    items[idx].scrollIntoView({ block: 'nearest' });
-    searchInput.setAttribute('aria-activedescendant', items[idx].id);
-  }
-
-  searchInput.addEventListener('input', () => showSearchDropdown(searchInput.value));
-  searchInput.addEventListener('focus', () => { if (searchInput.value) showSearchDropdown(searchInput.value); });
-  // Delay so a click/mousedown on an option can fire before we hide the list.
-  searchInput.addEventListener('blur',  () => setTimeout(hideSearchDropdown, 120));
+  const searchBox = MCO.initSearchBox({
+    input: searchInput,
+    listbox: searchDropdown,
+    items: () => _searchItems,
+    label: 'Stations',
+    limit: SEARCH_MAX_RESULTS,
+    onSelect: (id) => {
+      // Leave the field (and the compact overlay bar, or the rail's drawer)
+      // so the popup the flight ends on isn't sitting under an open search.
+      if (searchCtl.isOpen()) searchCtl.close({ restoreFocus: false });
+      if (rail.isOpen()) rail.close({ restoreFocus: false });
+      searchInput.blur();
+      flyToStation(id);
+    },
+  });
 
   // Below 640px the field collapses into a disclosure button grouped with the
   // other nav buttons and reopens as a full-width overlay bar under the navbar.
-  // The kit owns the collapse mechanics only — the combobox above stays ours.
   const searchCtl = MCO.initSearchCollapse({
     wrap:    document.getElementById('search-wrap'),
     toggle:  document.getElementById('btn-search-toggle'),
     input:   searchInput,
-    onClose: hideSearchDropdown,
+    onClose: () => searchBox.close(),
   });
+
+  // Landscape-phone rail (kit 0.10.0): the bar's contents move into a drawer
+  // beside a 56px rail. The drawer contract (focus in, everything else inert,
+  // Esc / scrim / toggle close, focus back to the toggle) is the kit's.
+  const railMenuBtn = document.getElementById('btn-rail-menu');
+  const rail = MCO.initNavRail({
+    toggle: railMenuBtn,
+    drawer: document.getElementById('nav-drawer'),
+    scrim:  document.getElementById('rail-scrim'),
+  });
+  document.getElementById('btn-rail-search').addEventListener('click', () => rail.open(searchInput));
 
   // With ?kbd=off the '/' shortcut is disabled, so advertising it would be a
   // lie. (The kit already hides this hint inside the compact overlay bar.)
@@ -1083,60 +1082,81 @@
   }
 
   // ── Popup ────────────────────────────────────────────────────────────────
-  function popupHTML(cellId) {
+  // Built with DOM APIs, never HTML strings (HOUSE-STYLE §7): the shell, title,
+  // subtitle, the .mco-facts list and the dashboard action come from the
+  // kit's MCO.map.popupContent(); this map adds its status pill and notes.
+  // Every API value goes in as text.
+
+  // The status pill, filled from the active category color. Pills are solid,
+  // so the label picks whichever of light/dark text reads better on the fill.
+  function statusPill(cat) {
+    const color = catColor(cat);
+    const pill = document.createElement('span');
+    pill.className = 'pop-pill';
+    pill.style.background = color;
+    pill.style.color = readableOn(color);
+    pill.textContent = catLabel(cat);
+    return pill;
+  }
+  function note(cls, ...parts) {
+    const el = document.createElement('p');
+    el.className = cls;
+    el.append(...parts);
+    return el;
+  }
+  // popupContent(o) plus the pill and any notes, slotted in after the
+  // subtitle (or the title) and before the facts.
+  function buildPopup(o, cat, notes) {
+    const frag = MCO.map.popupContent(o);
+    const root = frag.querySelector('.mco-popup');
+    const head = root.querySelector('.mco-popup-sub') || root.querySelector('.mco-popup-title');
+    head.after(statusPill(cat), ...(notes || []));
+    return frag;
+  }
+  const dashAction = (s) => [{ label: 'Open dashboard', href: DASH_URL(s.station) }];
+
+  function cellPopupContent(cellId) {
     const c = cellById.get(cellId);
-    if (!c) return '';
-    const color = catColor(c.cat);
-    const pill = `<span class="pop-pill" style="background:${color};color:${readableOn(color)}">${MCO.escapeHTML(catLabel(c.cat))}</span>`;
+    if (!c) return null;
     const s = c.stationId ? stationById.get(c.stationId) : null;
+    const title = `Grid cell ${cellId}`;
 
     if (c.ndawn) {
-      return `
-        <div class="pop-title">Grid cell ${MCO.escapeHTML(cellId)}</div>
-        ${pill}
-        <div class="pop-note">Station installed and maintained by
-          <a href="https://ndawn.ndsu.nodak.edu/" target="_blank" rel="noopener">NDAWN</a>.</div>
-      `;
+      const a = document.createElement('a');
+      a.href = 'https://ndawn.ndsu.nodak.edu/';
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = 'NDAWN';
+      return buildPopup({ title }, c.cat, [note('pop-note', 'Station installed and maintained by ', a, '.')]);
     }
     if (!s) {
-      return `
-        <div class="pop-title">Grid cell ${MCO.escapeHTML(cellId)}</div>
-        ${pill}
-        <div class="pop-empty">No station assigned to this cell yet.</div>
-      `;
+      return buildPopup({ title }, c.cat, [note('pop-empty', 'No station assigned to this cell yet.')]);
     }
-
     // An operational station has a real location and history; everything else
     // is a proposal, so the location is labelled as such and the install-date /
     // dashboard rows are omitted (there is nothing to link to yet).
     const live = c.cat === 'active';
-    const rows = stationFactRows(s, live);
-
-    return `
-      <div class="pop-title">${MCO.escapeHTML(s.name || s.station)}</div>
-      <div class="pop-sub">${MCO.escapeHTML(s.station)} · cell ${MCO.escapeHTML(cellId)}</div>
-      ${pill}
-      <dl class="pop-facts">${rows.join('')}</dl>
-      ${live ? `<div class="pop-links"><a href="${DASH_URL(s.station)}" target="_blank" rel="noopener">Open dashboard →</a></div>` : ''}
-    `;
+    return buildPopup({
+      title: s.name || s.station,
+      subtitle: `${s.station} · cell ${cellId}`,
+      facts: stationFacts(s, live),
+      actions: live ? dashAction(s) : [],
+    }, c.cat);
   }
 
-  // Shared fact rows for the cell popup above and the station popup below.
+  // Shared facts for the cell popup above and the station popup below.
   // `live` means "a real, installed station" — everything else is a proposal,
   // so the location reads as proposed and there is no install date to show.
-  function stationFactRows(s, live) {
+  function stationFacts(s, live) {
     const coords = (s.longitude != null && s.latitude != null)
       ? `${s.longitude.toFixed(4)}, ${s.latitude.toFixed(4)}` : '—';
-    const rows = [];
-    rows.push(`<dt>${live ? 'Location' : 'Proposed'}</dt><dd>${MCO.escapeHTML(coords)}</dd>`);
+    const facts = [[live ? 'Location' : 'Proposed', coords]];
     if (live && Number.isFinite(Number(s.elevation))) {
-      rows.push(`<dt>Elevation</dt><dd>${Math.round(Number(s.elevation) * 3.281).toLocaleString()} ft</dd>`);
+      facts.push(['Elevation', `${Math.round(Number(s.elevation) * 3.281).toLocaleString()} ft`]);
     }
-    if (live && s.date_installed) {
-      rows.push(`<dt>Installed</dt><dd>${MCO.escapeHTML(fmtDate(s.date_installed))}</dd>`);
-    }
-    if (s.nwsli_id) rows.push(`<dt>NWSLI</dt><dd>${MCO.escapeHTML(s.nwsli_id)}</dd>`);
-    return rows;
+    if (live && s.date_installed) facts.push(['Installed', fmtDate(s.date_installed)]);
+    if (s.nwsli_id) facts.push(['NWSLI', s.nwsli_id]);
+    return facts;
   }
 
   // Station-first popup, used when the click lands on a dot rather than a cell.
@@ -1144,54 +1164,139 @@
   // question "what is this station", so it gets its own answer. It also works
   // for a station whose ace_grid names no drawn cell — the cell popup cannot,
   // because it keys entirely off cellById and simply returns nothing.
-  function stationPopupHTML(stationId) {
+  function stationPopupContent(stationId) {
     const s = stationById.get(stationId);
-    if (!s) return '';
+    if (!s) return null;
     const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
     const known = cell ? cellById.get(cell) : null;
     const cat = known ? known.cat : categoryFor(s.status, activeView);
-    const color = catColor(cat);
-    const pill = `<span class="pop-pill" style="background:${color};color:${readableOn(color)}">${MCO.escapeHTML(catLabel(cat))}</span>`;
     const live = cat === 'active';
 
     // A station whose ace_grid names a cell this map does not draw. Say so
     // rather than leaving a dot floating with no explanation — it means the
     // station registry and the ACE grid geometry disagree, which is worth
     // someone noticing rather than silently rendering.
-    const orphan = cell && !known
-      ? `<div class="pop-note"><strong>Cell ${MCO.escapeHTML(cell)}</strong> is not in this map's grid — the station registry and the ACE grid geometry disagree.</div>`
-      : '';
-    const sub = cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`;
+    const notes = [];
+    if (cell && !known) {
+      const strong = document.createElement('strong');
+      strong.textContent = `Cell ${cell}`;
+      notes.push(note('pop-note', strong, " is not in this map's grid — the station registry and the ACE grid geometry disagree."));
+    }
+    return buildPopup({
+      title: s.name || s.station,
+      subtitle: cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`,
+      facts: stationFacts(s, live),
+      actions: live ? dashAction(s) : [],
+    }, cat, notes);
+  }
 
-    return `
-      <div class="pop-title">${MCO.escapeHTML(s.name || s.station)}</div>
-      <div class="pop-sub">${MCO.escapeHTML(sub)}</div>
-      ${pill}
-      ${orphan}
-      <dl class="pop-facts">${stationFactRows(s, live).join('')}</dl>
-      ${live ? `<div class="pop-links"><a href="${DASH_URL(s.station)}" target="_blank" rel="noopener">Open dashboard →</a></div>` : ''}
-    `;
+  // ── Detail: anchored popup on desktop, bottom sheet on compact ─────────
+  // One selection (a cell or a station, each with its own URL parameter) and
+  // one surface showing it. Above the compact breakpoint that is a MapLibre
+  // popup anchored to the feature; on compact it is the kit's bottom sheet
+  // (MCO.initSheet, kit 0.9.0) with the SAME popupContent() body — an
+  // anchored 320px popup covers most of a phone map and its tip points at a
+  // cell the finger is on top of. The sheet opens at peek (title, sub, status
+  // pill), drags or steps (the grip) to full, and closes on ×, Esc or a drag
+  // down; the map stays usable at peek.
+  const detailSheetEl = document.getElementById('detail-sheet');
+  const sheetTitleEl  = document.getElementById('detail-sheet-title');
+  const sheetBodyEl   = detailSheetEl.querySelector('.mco-sheet-body');
+  let _detail = null;          // 'popup' | 'sheet' | null — what is showing
+  let _detailClosing = false;  // a programmatic close: not the user dismissing it
+  const sheet = MCO.initSheet({
+    sheet: detailSheetEl,
+    // Where focus goes when the sheet closes with no usable opener (a
+    // ?station= / ?cell= deep link opens it with focus on <body>): <main>,
+    // the skip-link target, which holds the map. Since kit 0.11.3 the
+    // overlay honours this when the opener is <body> or hidden. The map
+    // canvas would be nicer, but it doesn't exist yet when this runs.
+    fallbackFocus: document.getElementById('main'),
+    onState: (st) => {
+      if (st === 'closed' && _detail === 'sheet' && !_detailClosing) {
+        _detail = null;
+        clearSelection();
+      }
+    },
+  });
+
+  function detailContent() {
+    if (_selectedCell) return cellPopupContent(_selectedCell);
+    if (_selectedStation) return stationPopupContent(_selectedStation);
+    return null;
+  }
+  // The sheet has its own title element, so the popup body's title moves
+  // there; the status pill marks the peek height.
+  function fillSheet(frag) {
+    const root = frag.querySelector('.mco-popup');
+    const t = root.querySelector('.mco-popup-title');
+    sheetTitleEl.textContent = t ? t.textContent : '';
+    if (t) t.remove();
+    const pill = root.querySelector('.pop-pill');
+    if (pill) pill.dataset.peek = '';
+    sheetBodyEl.replaceChildren(frag);
+  }
+  // Re-render whatever is open (a theme switch recolors the pill).
+  function refreshDetail() {
+    const content = detailContent();
+    if (!content) return;
+    if (_detail === 'popup' && _popup) _popup.setDOMContent(content);
+    else if (_detail === 'sheet') fillSheet(content);
+  }
+
+  // Take down the current surface without touching the selection or the URL.
+  function dismissDetail(restoreFocus) {
+    _detailClosing = true;
+    if (_popup) {
+      // Removing a popup that holds focus drops it to <body>; hand it to the
+      // map instead (WCAG 2.4.3).
+      const had = _popup.getElement().contains(document.activeElement);
+      _popup.remove();
+      _popup = null;
+      if (had && restoreFocus) map.getCanvas().focus();
+    }
+    if (_detail === 'sheet') sheet.close({ restoreFocus: !!restoreFocus });
+    _detail = null;
+    _detailClosing = false;
+  }
+
+  function clearSelection() {
+    if (!_selectedCell && !_selectedStation) return;
+    _selectedCell = null;
+    _selectedStation = null;
+    pushState();
+  }
+
+  function showDetail(lngLat) {
+    const content = detailContent();
+    if (!content) return;
+    if (MCO.viewport.isCompact()) {
+      fillSheet(content);
+      _detail = 'sheet';
+      sheet.open('peek', { opener: document.activeElement });
+      return;
+    }
+    const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
+      .setLngLat(lngLat)
+      .setDOMContent(content)
+      .addTo(map);
+    p.on('close', () => {
+      if (_detailClosing || _popup !== p) return;
+      _popup = null;
+      _detail = null;
+      clearSelection();
+    });
+    _popup = p;
+    _detail = 'popup';
   }
 
   function openStationPopup(stationId, lngLat) {
     const s = stationById.get(stationId);
     if (!s) return;
-    if (_popup) { _suppressNextPopupClose = true; _popup.remove(); _popup = null; }
+    dismissDetail(false);
     _selectedCell = null;
     _selectedStation = stationId;
-    const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
-      .setLngLat(lngLat || [s.longitude, s.latitude])
-      .setHTML(stationPopupHTML(stationId))
-      .addTo(map);
-    p.on('close', () => {
-      if (_suppressNextPopupClose) { _suppressNextPopupClose = false; return; }
-      if (_popup === p) {
-        _popup = null;
-        _selectedStation = null;
-        pushState();
-      }
-    });
-    _popup = p;
+    showDetail(lngLat || [s.longitude, s.latitude]);
     announceStation(stationId);
     pushState();
   }
@@ -1199,39 +1304,20 @@
   function openPopupFor(cellId, lngLat) {
     const c = cellById.get(cellId);
     if (!c) return;
-    if (_popup) { _suppressNextPopupClose = true; _popup.remove(); _popup = null; }
+    dismissDetail(false);
     _selectedStation = null;
     _selectedCell = cellId;
-    const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
-      .setLngLat(lngLat || c.center)
-      .setHTML(popupHTML(cellId))
-      .addTo(map);
-    p.on('close', () => {
-      if (_suppressNextPopupClose) { _suppressNextPopupClose = false; return; }
-      if (_popup === p) {
-        _popup = null;
-        _selectedCell = null;
-        pushState();
-      }
-    });
-    _popup = p;
+    showDetail(lngLat || c.center);
     announceCell(cellId);
     pushState();
   }
 
-  // Track whether the next Popup `close` event was triggered programmatically
-  // (so we don't pushState for an open-replace; the new popup pushes its own).
-  let _suppressNextPopupClose = false;
+  // The user closed the detail (Esc, an empty-map click): take it down and
+  // clear the selection.
   function closePopup() {
-    if (!_popup) return;
-    _suppressNextPopupClose = true;
-    _popup.remove();
-    _popup = null;
-    if (_selectedCell || _selectedStation) {
-      _selectedCell = null;
-      _selectedStation = null;
-      pushState();
-    }
+    if (!_detail) return;
+    dismissDetail(true);
+    clearSelection();
   }
 
   // ── URL state push ───────────────────────────────────────────────────────
@@ -1239,27 +1325,6 @@
   // URLs like overlays=counties+hucs. Enum-string values are lowercase.
   // Every parameter has a default and none is written while it matches, so a
   // fresh load carries no query string at all (HOUSE-STYLE §4).
-  function osTheme() {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  }
-
-  // Is the camera where a fresh load would have put it? cameraForBounds gives
-  // the same answer fitBounds acts on, so this stays correct as the container
-  // resizes rather than comparing against a stored constant.
-  function atDefaultExtent() {
-    if (!_mapReady) return true;
-    let want;
-    try { want = map.cameraForBounds(MT_FIT_BOUNDS, FIT_OPTS); } catch { return false; }
-    if (!want) return false;
-    const wc = want.center;
-    const wlng = typeof wc.lng === 'number' ? wc.lng : wc[0];
-    const wlat = typeof wc.lat === 'number' ? wc.lat : wc[1];
-    const c = map.getCenter();
-    return Math.abs(map.getZoom() - want.zoom) < 0.02
-        && Math.abs(c.lng - wlng) < 0.01
-        && Math.abs(c.lat - wlat) < 0.01;
-  }
-
   function pushState() {
     const params = {};
     if (activeView === 'internal') params.internal = '1';
@@ -1273,17 +1338,22 @@
     if (activeOverlays.size) params.overlays = [...activeOverlays].join(' ');
     if (!stationsOn) params.stations = 'off';
     if (labelsOn) params.labels = 'on';
-    if (legendCollapsed) params.legend = 'collapsed';
+    // The legend's default is viewport-dependent (collapsed on a phone), so
+    // emit it only when it differs from what a fresh load here would pick.
+    if (legendCollapsed !== MCO.viewport.isCompact()) params.legend = legendCollapsed ? 'collapsed' : 'open';
     if (!kbdShortcuts) params.kbd = 'off';
     // The theme's default is the OS preference, so emit it only when the user
     // has gone against that. Their own choice is remembered in localStorage
     // either way — the parameter exists so a shared link can carry a
     // deliberate one, not so every link imposes the sender's theme.
     const theme = MCO.getTheme();
-    if (theme && theme !== osTheme()) params.theme = theme;
+    if (theme && theme !== MCO.osTheme()) params.theme = theme;
     // The camera's default is the fitted Montana extent. Emitted as a set,
     // because the parser needs all three to position the map.
-    if (!atDefaultExtent()) Object.assign(params, MCO.map.cameraParams(map));
+    // cameraParamsIfDefault (kit 0.8.0) writes nothing while the camera is
+    // where a fresh load would put it; this file used to carry that as
+    // atDefaultExtent().
+    if (_mapReady) Object.assign(params, MCO.map.cameraParamsIfDefault(map));
     if (_selectedCell) params.cell = _selectedCell;
     if (_selectedStation) params.station = _selectedStation;
     MCO.replaceUrlState(params);
@@ -1300,6 +1370,8 @@
         t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
       if (inField) return;
       e.preventDefault();
+      // On the landscape-phone rail the field lives in the closed drawer.
+      if (rail.isRail()) { rail.open(searchInput); return; }
       // When the field is collapsed the overlay has to open first — otherwise
       // '/' focuses an input that is display:none and the keystroke is lost.
       if (searchCtl.isCollapsed()) { searchCtl.open(); return; }
@@ -1307,41 +1379,23 @@
       searchInput.select();
     }
   });
-  // Keyboard nav inside the custom dropdown.
+  // The kit's combobox owns the list keys. An Escape it did not consume (the
+  // list is closed and the field already empty) dismisses the compact overlay
+  // bar and hands focus back to the toggle — blurring alone would strand
+  // focus behind a still-open overlay.
   searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      searchInput.value = '';
-      hideSearchDropdown();
-      // In the collapsed overlay, Escape should dismiss the bar and hand focus
-      // back to the toggle — blurring alone would strand focus on the body
-      // behind a still-open overlay.
-      if (searchCtl.isOpen()) { searchCtl.close(); return; }
-      searchInput.blur();
-      return;
-    }
-    if (searchDropdown.hidden) return;
-    const items = searchDropdown.querySelectorAll('li');
-    if (!items.length) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setActiveSearchItem(_activeSearchIndex + 1);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setActiveSearchItem(_activeSearchIndex - 1);
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      const idx = _activeSearchIndex >= 0 ? _activeSearchIndex : 0;
-      const id = items[idx].dataset.stationId;
-      if (id) selectStation(id);
-    }
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    if (searchCtl.isOpen()) { e.stopPropagation(); searchCtl.close(); return; }
+    searchInput.blur();
   });
 
   // ── Refresh (manual data reload) ─────────────────────────────────────────
-  document.getElementById('btn-refresh').addEventListener('click', () => {
+  function refreshData() {
     if (!_mapReady) return;   // the first load is still on its way
     refreshStampEl.textContent = 'loading…';
     loadAll();
-  });
+  }
+  document.getElementById('btn-refresh').addEventListener('click', refreshData);
 
   // ── Labels toggle ────────────────────────────────────────────────────────
   let labelsOn = (() => {
@@ -1398,9 +1452,17 @@
   _legendInit = false;
 
   // ── Legend (Plotly-style toggles) ────────────────────────────────────────
-  // Single click toggles a category; double-click isolates that category
-  // (double-click an already-isolated category to show all again).
-  const LEGEND_DBLCLICK_MS = 280;
+  // The rows are the kit's .mco-legend-row, wired by MCO.initLegendToggles
+  // (kit 0.8.0): click toggles a category, double-click — or Shift+Enter, the
+  // keyboard twin — isolates it, double-click the isolated one to show all.
+  // Every change is announced. Off dims the SWATCH and strikes the label; the
+  // old `.legend-row.off { opacity: 0.4 }` dimmed the whole row and put its
+  // label at 2.7:1 (WCAG 1.4.3).
+  //
+  // The rows are built once — the categories are fixed per view — and only
+  // their swatch colors (composited against the basemap, so theme-dependent)
+  // and counts are refreshed after that.
+  let legendCtl = null;
 
   function categoryCounts() {
     const counts = {};
@@ -1408,10 +1470,8 @@
     return counts;
   }
 
-  function renderLegend() {
-    legendRowsEl.innerHTML = '';
-    const counts = categoryCounts();
-    const set = currentCats();
+  function buildLegend() {
+    legendRowsEl.textContent = '';
     // Every category is listed, including ones no cell is currently in. The
     // legend is the key to the color scheme, not a summary of what's on screen
     // — dropping empty rows would hide what a color means until it happens to
@@ -1419,25 +1479,17 @@
     for (const r of VIEWS[activeView].cats) {
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'legend-row';
-      row.dataset.catKey = r.key;
-      const on = set.has(r.key);
-      row.setAttribute('aria-pressed', on ? 'true' : 'false');
-      if (!on) row.classList.add('off');
+      row.className = 'mco-legend-row';
+      row.dataset.key = r.key;
       const sw = document.createElement('span');
-      sw.className = 'legend-swatch';
-      sw.style.background = swatchColor(r.key);
+      sw.className = 'mco-legend-swatch';
       sw.setAttribute('aria-hidden', 'true');
       const lb = document.createElement('span');
-      lb.className = 'legend-lbl';
+      lb.className = 'mco-legend-label';
       lb.textContent = r.label;
       const ct = document.createElement('span');
-      ct.className = 'legend-count';
-      ct.textContent = String(counts[r.key] || 0);
-      row.appendChild(sw);
-      row.appendChild(lb);
-      row.appendChild(ct);
-      attachLegendHandlers(row, r.key);
+      ct.className = 'mco-legend-count';
+      row.append(sw, lb, ct);
       legendRowsEl.appendChild(row);
     }
 
@@ -1445,9 +1497,15 @@
     // (their visibility lives on the Stations chip instead).
     const stat = document.createElement('div');
     stat.className = 'legend-static';
-    stat.innerHTML =
-      `<span class="legend-swatch" style="background:var(--c-station)" aria-hidden="true"></span>` +
-      `<span class="legend-lbl">Station location</span>`;
+    const ssw = document.createElement('span');
+    ssw.className = 'mco-legend-swatch';
+    ssw.dataset.shape = 'circle';
+    ssw.style.setProperty('--swatch', 'var(--c-station)');
+    ssw.setAttribute('aria-hidden', 'true');
+    const slb = document.createElement('span');
+    slb.className = 'mco-legend-label';
+    slb.textContent = 'Station location';
+    stat.append(ssw, slb);
     legendRowsEl.appendChild(stat);
 
     const hint = document.createElement('div');
@@ -1459,68 +1517,59 @@
     note.className = 'legend-note';
     note.textContent = 'Cell status subject to change';
     legendRowsEl.appendChild(note);
+
+    legendCtl = MCO.initLegendToggles({
+      rows: legendRowsEl.querySelectorAll('.mco-legend-row'),
+      visible: currentCats(),
+      noun: 'statuses',
+      onChange: (vis) => {
+        const set = currentCats();
+        set.clear();
+        for (const k of vis) set.add(k);
+        applyAllFilters();
+        pushState();
+      },
+    });
   }
 
+  function renderLegend() {
+    if (!legendCtl) buildLegend();
+    const counts = categoryCounts();
+    for (const row of legendRowsEl.querySelectorAll('.mco-legend-row')) {
+      const key = row.dataset.key;
+      row.querySelector('.mco-legend-swatch').style.setProperty('--swatch', swatchColor(key));
+      row.querySelector('.mco-legend-count').textContent = String(counts[key] || 0);
+    }
+  }
+
+  // Sync the rows to currentCats() after code outside the legend changed it
+  // (a search or deep link re-showing a hidden status). Silent: no
+  // announcement, no onChange.
   function refreshLegendVisuals() {
-    const set = currentCats();
-    for (const row of legendRowsEl.querySelectorAll('.legend-row')) {
-      const on = set.has(row.dataset.catKey);
-      row.setAttribute('aria-pressed', on ? 'true' : 'false');
-      row.classList.toggle('off', !on);
+    if (legendCtl) legendCtl.set(currentCats());
+  }
+
+  // Every style.load: the first one, a theme switch, the blank-basemap
+  // fallback, a basemap Retry.
+  function onStyleLoad() {
+    addCustomLayers();     // (also re-adds the active overlays)
+    if (!_mapReady) {
+      _mapReady = true;
+      zoomFloor.refresh();
+      // Kick off the data fetch once layers exist, so rebuildCells never
+      // lands before its source.
+      loadAll();
+      return;
     }
-  }
-
-  function attachLegendHandlers(row, key) {
-    let clickTimer = null;
-    row.addEventListener('click', () => {
-      // Defer single-click action so a follow-up dblclick can pre-empt it.
-      if (clickTimer) return;   // already pending → second click; let dblclick handle it
-      clickTimer = setTimeout(() => {
-        clickTimer = null;
-        toggleCategory(key);
-      }, LEGEND_DBLCLICK_MS);
-    });
-    row.addEventListener('dblclick', () => {
-      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
-      isolateCategory(key);
-    });
-    // Keyboard equivalent for double-click: Shift+Enter on a focused row
-    // isolates. (Plain Enter / Space still fires `click` natively → toggle.)
-    row.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.shiftKey) {
-        e.preventDefault();
-        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
-        isolateCategory(key);
-      }
-    });
-  }
-
-  function toggleCategory(key) {
-    const set = currentCats();
-    if (set.has(key)) set.delete(key);
-    else set.add(key);
-    refreshLegendVisuals();
-    applyAllFilters();
-    pushState();
-  }
-
-  function isolateCategory(key) {
-    const set = currentCats();
-    const all = currentAllCats();
-    // Already isolated to this key → restore everything.
-    if (set.size === 1 && set.has(key)) {
-      set.clear();
-      for (const k of all) set.add(k);
-    } else {
-      set.clear();
-      set.add(key);
-    }
-    refreshLegendVisuals();
-    applyAllFilters();
-    pushState();
+    rebuildCells();        // repopulate the now-empty cells source
+    // Swatch and pill colors are composited against the basemap, so they
+    // have to be regenerated rather than just left alone.
+    renderLegend();
+    refreshDetail();
   }
 
   // ── Map construction (after MapLibre 6 has loaded) ─────────────────────
+  let zoomFloor = null;
   function initMap() {
     map = new maplibregl.Map({
       container: 'map',
@@ -1534,19 +1583,20 @@
     // Keeps Montana filling the viewport: snaps back when the user zooms out past
     // the fitted extent, and recomputes that floor after a resize settles (the
     // zoom that fits MT is viewport-dependent).
-    const zoomFloor = MCO.map.installZoomFloor(map);
+    zoomFloor = MCO.map.installZoomFloor(map);
 
-    map.on('load', () => {
-      // Chips first: addCustomLayers() kicks off any saved overlay fetches, and
-      // those want a chip to hang their busy/error state on.
-      buildLayerChips();
-      addCustomLayers();
-      zoomFloor.refresh();
-      _mapReady = true;
-      // Kick off the data fetch once layers exist, so rebuildCells never lands
-      // before its source.
-      loadAll();
-    });
+    // Chips first: addCustomLayers() kicks off any saved overlay fetches, and
+    // those want a chip to hang their busy/error state on.
+    buildLayerChips();
+
+    // A dead basemap no longer strands the page: the kit retries the style,
+    // then falls back to a blank --bg-deep style (which DOES load, so the grid
+    // still draws) with a Retry notice (kit 0.8.0). That fallback, a theme
+    // switch, and a Retry all replace the style, and every replacement wipes
+    // our sources and layers, so they are re-added on EVERY style.load — not
+    // once on 'load', which never fires at all if the first style fails.
+    MCO.map.watchBasemap(map, { styleUrl: MCO.map.cartoStyleUrl });
+    map.on('style.load', onStyleLoad);
 
     // Reflect every pan/zoom in the URL so the view is sharable
     map.on('moveend', pushState);
@@ -1571,66 +1621,40 @@
     });
 
     // ── Hover tooltip ────────────────────────────────────────────────────────
-    const tooltipEl = document.getElementById('tooltip');
-    function showTooltip(f, e) {
-      let title, sub, line;
-      if (f.layer.id === 'stations-layer') {
-        // Hovering a dot asks about the station, and must work even when its
-        // ace_grid names no drawn cell.
-        const s = stationById.get(f.properties.station);
-        if (!s) return;
-        const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
-        const known = cell ? cellById.get(cell) : null;
-        title = s.name || s.station;
-        sub   = cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`;
-        line  = known
-          ? (known.ndawn ? 'Operational (NDAWN)' : catLabel(known.cat))
-          : `${catLabel(categoryFor(s.status, activeView))} · cell not in this grid`;
-      } else {
+    // The kit's cursor tooltip (kit 0.8.0) owns the mousemove dispatcher,
+    // cursor+14 positioning (flipped at the viewport edge), cursor: pointer and
+    // the mouseleave cleanup, and sets every line with textContent. A dot is
+    // queried before the cell under it. Decorative (aria-hidden): the same
+    // facts reach AT through the popup announcement and the table twin.
+    MCO.map.initCursorTooltip(map, {
+      element: document.getElementById('tooltip'),
+      layers: ['stations-layer', 'cells-fill'],
+      render: (f) => {
+        if (f.layer.id === 'stations-layer') {
+          // Hovering a dot asks about the station, and must work even when
+          // its ace_grid names no drawn cell.
+          const s = stationById.get(f.properties.station);
+          if (!s) return null;
+          const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
+          const known = cell ? cellById.get(cell) : null;
+          return {
+            name: s.name || s.station,
+            sub:  cell ? `${s.station} · cell ${cell}` : `${s.station} · no cell assigned`,
+            line: known
+              ? (known.ndawn ? 'Operational (NDAWN)' : catLabel(known.cat))
+              : `${catLabel(categoryFor(s.status, activeView))} · cell not in this grid`,
+          };
+        }
         const cell = normalizeCell(f.properties.cell);
         const c = cellById.get(cell);
-        if (!c) return;
+        if (!c) return null;
         const s = c.stationId ? stationById.get(c.stationId) : null;
-        title = s ? (s.name || s.station) : `Grid cell ${cell}`;
-        sub   = s ? `${s.station} · cell ${cell}` : cell;
-        line  = c.ndawn ? 'Operational (NDAWN)' : catLabel(c.cat);
-      }
-      tooltipEl.innerHTML =
-        `<span class="tooltip-name">${MCO.escapeHTML(title)}</span>` +
-        `<span class="tooltip-sub">${MCO.escapeHTML(sub)}</span>` +
-        `<span class="tooltip-line">${MCO.escapeHTML(line)}</span>`;
-      tooltipEl.classList.add('visible');
-      tooltipEl.style.left = `${e.originalEvent.clientX + 14}px`;
-      tooltipEl.style.top  = `${e.originalEvent.clientY + 14}px`;
-    }
-    function hideTooltip() { tooltipEl.classList.remove('visible'); }
-
-    // Single global mousemove dispatcher — does its own queryRenderedFeatures
-    // against the layer set. Avoids layer-scoped listeners, which can become
-    // detached when the style is swapped on theme toggle (MapLibre keeps the
-    // map-level handler stable across setStyle).
-    const HOVER_LAYERS = ['stations-layer', 'cells-fill'];
-    let _hovered = null;
-
-    map.on('mousemove', (e) => {
-      const layers = HOVER_LAYERS.filter(lid => map.getLayer(lid));
-      const feats = layers.length ? map.queryRenderedFeatures(e.point, { layers }) : [];
-      const f = feats.find(x => x.layer.id === 'stations-layer') || feats[0] || null;
-      if (f) {
-        map.getCanvas().style.cursor = 'pointer';
-        showTooltip(f, e);
-        _hovered = f.layer.id === 'stations-layer' ? f.properties.station : f.properties.cell;
-      } else if (_hovered !== null) {
-        map.getCanvas().style.cursor = '';
-        hideTooltip();
-        _hovered = null;
-      }
-    });
-    // Cursor + tooltip cleanup when the pointer leaves the map entirely.
-    map.getCanvas().addEventListener('mouseleave', () => {
-      map.getCanvas().style.cursor = '';
-      hideTooltip();
-      _hovered = null;
+        return {
+          name: s ? (s.name || s.station) : `Grid cell ${cell}`,
+          sub:  s ? `${s.station} · cell ${cell}` : cell,
+          line: c.ndawn ? 'Operational (NDAWN)' : catLabel(c.cat),
+        };
+      },
     });
 
   }
