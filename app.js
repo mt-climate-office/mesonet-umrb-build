@@ -59,6 +59,14 @@
   //
   // So they get one ramp rather than seven hand-picked hues: Fabio Crameri's
   // `roma`, from the Scientific colour maps, sampled at seven even positions.
+  // The hues are the kit's roma — MCO.palette 'roma' (kit 0.12.0, Crameri v8,
+  // 11 stops) — read at t = stage/6, with "Build in progress" at t = 0.75
+  // (below). The hexes in VIEWS are derived OFFLINE, because the lightness
+  // remap below has no runtime equivalent in the kit; they stay hard-coded.
+  // Checked against MCO.palette.colorAt('roma', t) at those positions (kit
+  // 0.12.0): OKLab hue agrees within 1.3° for every stage in both themes,
+  // except 'Available cell' on light (3.1°, the deepest point of the remap).
+  // Only lightness (and with it chroma) moves.
   // roma is perceptually uniform (adjacent steps differ by an equal, visible
   // amount), readable in grayscale, and CVD-tested by construction — worst-case
   // pairwise ΔE in CAM02-UCS is 14.6 (light) / 16.0 (dark) under simulated
