@@ -1198,22 +1198,17 @@
   let _detailClosing = false;  // a programmatic close: not the user dismissing it
   const sheet = MCO.initSheet({
     sheet: detailSheetEl,
-    fallbackFocus: document.getElementById('map'),
+    // Where focus goes when the sheet closes with no usable opener (a
+    // ?station= / ?cell= deep link opens it with focus on <body>): <main>,
+    // the skip-link target, which holds the map. Since kit 0.11.3 the
+    // overlay honours this when the opener is <body> or hidden. The map
+    // canvas would be nicer, but it doesn't exist yet when this runs.
+    fallbackFocus: document.getElementById('main'),
     onState: (st) => {
-      if (st !== 'closed') return;
-      if (_detail === 'sheet' && !_detailClosing) {
+      if (st === 'closed' && _detail === 'sheet' && !_detailClosing) {
         _detail = null;
         clearSelection();
       }
-      // The kit restores focus to the opener. Opened from a deep link, the
-      // opener is <body> (the kit's overlay takes document.activeElement
-      // when no opener is given, so its fallbackFocus never applies), and
-      // focus stays on <body> or on the now-hidden grip. Land on the map
-      // canvas instead (WCAG 2.4.3).
-      setTimeout(() => {
-        const a = document.activeElement;
-        if (map && !_detail && (!a || a === document.body || detailSheetEl.contains(a))) map.getCanvas().focus();
-      }, 0);
     },
   });
 
