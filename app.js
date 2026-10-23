@@ -839,7 +839,8 @@
         minzoom: OVERLAY_LABEL_MINZOOM,
         layout: key === 'tribal' ? MCO.map.TRIBAL_LABEL_LAYOUT : {
           'text-field': ['coalesce', ['get', 'name'], ['get', 'NAME'], ''],
-          'text-font':  ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+          // The kit's tribal-label face (0.15.1): CARTO 404s 'Open Sans Semibold'.
+          'text-font':  ['Montserrat SemiBold', 'Open Sans Bold'],
           'text-size':  ['interpolate', ['linear'], ['zoom'], 8, 10, 12, 13],
           'text-letter-spacing': 0.05,
           'text-max-width': 8,
