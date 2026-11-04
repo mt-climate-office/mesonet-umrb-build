@@ -111,7 +111,7 @@
   const infoModal      = document.getElementById('info-modal');
   const brandFlagEl    = document.getElementById('brand-flag');
 
-  // Say what a popup opened via click, search, or deep-link contains, through
+  // Say what a detail opened via click, search, or deep-link contains, through
   // the kit's one announcer (MCO.announce, kit 0.8.0): its live regions exist
   // from load, and it clears before setting so reopening the same cell is
   // read again — the hand-made #sr-announce region did neither.
@@ -124,7 +124,7 @@
       ? `Cell ${cellId}, ${label}, ${s.name}.`
       : `Cell ${cellId}, ${label}.`);
   }
-  // Same, for a popup opened on a station dot rather than a cell.
+  // Same, for a detail opened on a station dot rather than a cell.
   function announceStation(stationId) {
     const s = stationById.get(stationId);
     if (!s) return;
@@ -146,14 +146,14 @@
     return new Date(y, m - 1, d)
       .toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' });
   }
+  // The family stamp (kit 0.21.0): "Updated 2:45 PM MST", in Mountain time
+  // whatever the viewer's zone, with the date when it is not today there.
+  // The status feed carries no observation time (it is a live read of the
+  // registry), so the time is when this page read it — the kit's rule for
+  // a feed without a data time. At ≤1400px the kit hides the word
+  // "Updated" visually; screen readers still hear the whole phrase.
   function refreshStamp() {
-    // Mountain Time, not viewer-local. This is an operations map for a Montana
-    // network: "loaded 14:05" has to mean the same clock to a field tech in
-    // Bozeman and a collaborator in DC (HOUSE-STYLE § time).
-    refreshStampEl.textContent = `loaded ${MCO.hhmmNowMT()} MT`;
-    // At ≤1400px the stamp is icon-only (index.html § Responsive): the
-    // wrapper's title carries the time for pointer users.
-    refreshStampEl.parentElement.title = `Last refreshed: ${refreshStampEl.textContent}`;
+    MCO.formatUpdatedMT(Date.now(), { into: refreshStampEl });
   }
 
   // ── Theme ────────────────────────────────────────────────────────────────
@@ -261,7 +261,6 @@
   let _gridsFC  = null;            // raw grid geometry, fetched once
   let _stateFC  = null;
   let _mapReady = false;
-  let _popup = null;
 
   async function preloadOverlay(sourceId, url, save) {
     try {
@@ -478,8 +477,25 @@
     }
 
     // Station dots last so they always win against fills and outlines.
+    // A colocated site (stations within ~11 m) is one dot with a count
+    // badge that fans out on hover or first tap (MCO.map.colocation, kit
+    // 0.21.0). The registry has no such site today, so the badge and the
+    // spider normally draw nothing; they are there so a second station at
+    // a site never hides under the first.
+    coloc.addSources();
+    if (!map.getLayer('stations-spider-lines')) {
+      map.addLayer({ id: 'stations-spider-lines', type: 'line', source: coloc.spiderLinesSource,
+                     paint: MCO.map.colocation.spiderLinePaint() });
+    }
     if (!map.getLayer('stations-layer')) {
-      map.addLayer({ id: 'stations-layer', type: 'circle', source: 'stations', paint: stationPaint() });
+      map.addLayer({ id: 'stations-layer', type: 'circle', source: 'stations',
+                     filter: MCO.map.colocation.ANCHOR_ONLY, paint: stationPaint() });
+    }
+    for (const l of MCO.map.colocation.badgeLayers({ id: 'stations-badge', source: 'stations' })) {
+      if (!map.getLayer(l.id)) map.addLayer(l);
+    }
+    if (!map.getLayer('stations-spider')) {
+      map.addLayer({ id: 'stations-spider', type: 'circle', source: coloc.spiderSource, paint: stationPaint() });
     }
 
     applyAllFilters();
@@ -528,25 +544,23 @@
     };
   }
   // The dot marks *where* a station is; the cell behind it carries the status.
-  // So it is deliberately achromatic — any hue would either duplicate the ramp
-  // or, if warm, collide with the ramp's yellow end under deuteranopia (ΔE ~3).
-  // Pure lightness contrast separates it from every category for every kind of
-  // color vision (worst case ΔE 26).
+  // So it is deliberately achromatic: pure lightness contrast separates it
+  // from the colored categories, and a hue would only duplicate one of them.
   //
-  // Shape and size come from the kit's marker paint (MCO.map.markerPaint,
-  // kit 0.9.0): every UMRB station is a Mesonet HydroMet station, a filled
-  // circle. Its colors are read from tokens at paint time instead of the
-  // hard-coded pairs this used to carry: the fill is this page's --c-station
-  // and the edge is --bg-deep, the basemap-dark (or -light) opposite of the
-  // fill. The kit's own edge (--dot-stroke) is white on the dark themes —
-  // right for a colored network dot, invisible around a white one.
+  // The kit's one station circle (MCO.map.stationPaint, kit 0.21.0): no
+  // network encoding, as everywhere in the family. Its colors are read from
+  // tokens at paint time: the fill is this page's --c-station and the edge is
+  // --bg-deep, the basemap-dark (or -light) opposite of the fill. The kit's
+  // default edge (--dot-stroke) is white on the dark themes — right for a
+  // colored dot, invisible around a white one. The radius ramp stays this
+  // map's: the dots sit inside cells and must not cover them at low zoom.
   function stationPaint() {
     return {
-      ...MCO.map.markerPaint('hydromet', {
+      ...MCO.map.stationPaint({
         fill:   MCO.cssVar('--c-station'),
+        stroke: MCO.cssVar('--bg-deep'),
         radius: ['interpolate', ['linear'], ['zoom'], 4, 2.5, 7, 4, 10, 6, 14, 8],
       }),
-      'circle-stroke-color': MCO.cssVar('--bg-deep'),
       'circle-opacity': 0.95,
     };
   }
@@ -604,18 +618,24 @@
       MCO.ready();   // first meaningful state: the grid is shaded (idempotent)
 
       // Deep-link from ?cell=… / ?station=… . loadAll() only runs after the
-      // map's 'load' handler, so the layers always exist by this point.
+      // map's first style.load, so the layers always exist by this point.
       // ?station= opens the station itself; ?cell= opens the cell. Resolving a
       // station down to its cell (the old behaviour) lost the distinction and
       // dropped any station whose ace_grid is not in the drawn grid.
+      // The kit's flyToAndOpen waits for the map to be idle with the target
+      // in view; this page used to open on the first moveend, which under
+      // reduced motion fired before it was listened for, so the link zoomed,
+      // opened nothing, and lost ?station= from the URL. With a camera in the
+      // link (lng/lat/zoom) it keeps that camera, and opens without moving
+      // when the target is in view. url 'replace': the link's history entry
+      // is the page's own, so closing must never step Back off the site.
+      const zoom = _hasInitPos ? map.getZoom() : SEARCH_FLY_ZOOM;
       if (!_deepLinkConsumed && _initStation && stationById.has(_initStation)) {
         _deepLinkConsumed = true;
-        if (_hasInitPos) openStationPopup(_initStation);
-        else             flyToStation(_initStation);
+        flyToStation(_initStation, { url: 'replace', zoom });
       } else if (!_deepLinkConsumed && _initCell && cellById.has(_initCell)) {
         _deepLinkConsumed = true;
-        if (_hasInitPos) openPopupFor(_initCell);
-        else             flyToCell(_initCell);
+        flyToCell(_initCell, { url: 'replace', zoom });
       } else {
         // Push initial URL so it's clean even if the user hasn't interacted yet
         pushState();
@@ -699,7 +719,7 @@
 
   // Cheap representative point: the centroid of the feature's bounding box.
   // Grid cells are near-rectangular, so this lands inside the cell and is all
-  // flyTo / popup anchoring needs.
+  // flyTo needs.
   function featureCenter(f) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     const walk = (a) => {
@@ -732,23 +752,10 @@
 
     // Station dots. Parity with the Leaflet map: decommissioned stations and
     // rows with no cell assignment are omitted, so the dots always correspond
-    // to the buildout the grid is describing.
-    const stationFeatures = [];
-    for (const s of stations) {
-      if (!s || s.status === 'decommissioned' || !s.ace_grid) continue;
-      if (s.longitude == null || s.latitude == null) continue;
-      stationFeatures.push({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [s.longitude, s.latitude] },
-        properties: {
-          station: s.station,
-          name:    s.name || s.station,
-          cell:    normalizeCell(s.ace_grid),
-          cat:     categoryFor(s.status, activeView),
-        },
-      });
-    }
-    map.getSource('stations').setData({ type: 'FeatureCollection', features: stationFeatures });
+    // to the buildout the grid is describing. The colocation module groups
+    // them and writes the 'stations' source.
+    coloc.setData(stations.filter(s => s && s.status !== 'decommissioned' && s.ace_grid
+      && s.longitude != null && s.latitude != null));
 
     rebuildSrTable(cellFeatures);
   }
@@ -924,21 +931,28 @@
     }
   }
 
+  const STATION_LAYERS = ['stations-layer', 'stations-badge-disc', 'stations-badge',
+                          'stations-spider', 'stations-spider-lines'];
   function applyStationsVisibility() {
-    if (map && map.getLayer('stations-layer')) {
-      map.setLayoutProperty('stations-layer', 'visibility', stationsOn ? 'visible' : 'none');
+    if (!map) return;
+    if (!stationsOn && coloc) coloc.close();
+    for (const lid of STATION_LAYERS) {
+      if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', stationsOn ? 'visible' : 'none');
     }
   }
 
   // Legend category visibility is the only filter; it applies to the cell fill,
   // its outline and label, and the station dots sitting inside those cells, so
-  // isolating a status leaves a coherent picture.
+  // isolating a status leaves a coherent picture. Stations are filtered in
+  // the colocation module (visible()), not by layer filter, so a hidden
+  // station also leaves its site's count.
   function applyAllFilters() {
     if (!map || !map.getLayer('cells-fill')) return;
     const catMatch = ['in', ['get', 'cat'], ['literal', [...currentCats()]]];
-    for (const lid of ['cells-fill', 'cells-line', 'cells-label', 'stations-layer']) {
+    for (const lid of ['cells-fill', 'cells-line', 'cells-label']) {
       if (map.getLayer(lid)) map.setFilter(lid, catMatch);
     }
+    if (coloc) coloc.refresh();
     updateEmptyState();
   }
 
@@ -963,7 +977,7 @@
     emptyStateEl.hidden = !emptyStateEl.textContent;
   }
 
-  // ── Search (MCO.initSearchBox + flyTo + popup) ──────────────────────────
+  // ── Search (MCO.initSearchBox + flyToAndOpen + detail) ─────────────────
   // The kit's APG combobox (kit 0.8.0) on the dashboard's model: ranking,
   // aria-activedescendant, a disabled "No matches" option, polite result
   // counts, and Esc that closes, then clears, then passes through. This page
@@ -988,30 +1002,50 @@
     if (searchBox) searchBox.refresh();
   }
 
+  // A hidden category would fly the user to a blank patch of map — turn it
+  // back on rather than silently landing on nothing.
+  function ensureCatVisible(cat) {
+    if (currentCats().has(cat)) return;
+    currentCats().add(cat);
+    refreshLegendVisuals();
+    applyAllFilters();
+  }
+
+  // One flight at a time (MCO.map.flyToAndOpen, kit 0.21.0): it opens the
+  // detail once the map is idle with the target in view. While it is in the
+  // air the URL already carries the target (_pendingDetail), so a moveend
+  // on the way cannot strip ?station= off a deep link.
+  let _flightAC = null;
+  let _pendingDetail = null;
+  function cancelFlight() {
+    _pendingDetail = null;
+    if (_flightAC) { _flightAC.abort(); _flightAC = null; }
+  }
+  function flyAndOpen(center, zoom, pending, ensureVisible, open) {
+    cancelFlight();
+    const ac = _flightAC = new AbortController();
+    _pendingDetail = pending;
+    MCO.map.flyToAndOpen(map, {
+      center, zoom, speed: SEARCH_FLY_SPEED, signal: ac.signal,
+      ensureVisible,
+      open: () => { if (_flightAC === ac) _flightAC = null; _pendingDetail = null; open(); },
+    }).then((ok) => { if (!ok && _flightAC === ac) { _flightAC = null; _pendingDetail = null; } });
+  }
+
   // Searching a station lands on the STATION, not on its cell — the two only
   // differ for a station whose ace_grid names no drawn cell, and that is exactly
-  // the case the old cell-only path dead-ended on with a toast and no popup.
-  function flyToStation(stationId) {
+  // the case the old cell-only path dead-ended on with a toast and no detail.
+  function flyToStation(stationId, { url = 'auto', zoom = SEARCH_FLY_ZOOM } = {}) {
     const s = stationById.get(stationId);
     if (!s || s.longitude == null || s.latitude == null) {
       MCO.showToast(`${(s && (s.name || s.station)) || stationId} has no location`);
       return;
     }
-    // A hidden category would fly the user to a blank patch of map — turn it
-    // back on rather than silently landing on nothing.
     const cell = s.ace_grid ? normalizeCell(s.ace_grid) : null;
     const known = cell ? cellById.get(cell) : null;
     const cat = known ? known.cat : categoryFor(s.status, activeView);
-    if (!currentCats().has(cat)) {
-      currentCats().add(cat);
-      refreshLegendVisuals();
-      applyAllFilters();
-    }
-    map.flyTo({
-      center: [s.longitude, s.latitude], zoom: SEARCH_FLY_ZOOM,
-      speed: SEARCH_FLY_SPEED, animate: !MCO.reducedMotion(),
-    });
-    map.once('moveend', () => openStationPopup(stationId));
+    flyAndOpen([s.longitude, s.latitude], zoom, { station: stationId },
+      () => ensureCatVisible(cat), () => openStation(stationId, { url }));
   }
 
   const searchBox = MCO.initSearchBox({
@@ -1021,34 +1055,29 @@
     label: 'Stations',
     limit: SEARCH_MAX_RESULTS,
     onSelect: (id) => {
-      // Leave the field (and the compact overlay bar, or the rail's drawer)
-      // so the popup the flight ends on isn't sitting under an open search.
-      if (searchCtl.isOpen()) searchCtl.close({ restoreFocus: false });
+      // Leave the field (and the compact or rail drawer) so the detail the
+      // flight ends on isn't sitting under an open search.
       if (rail.isOpen()) rail.close({ restoreFocus: false });
       searchInput.blur();
       flyToStation(id);
     },
   });
 
-  // Below 640px the field collapses into a disclosure button grouped with the
-  // other nav buttons and reopens as a full-width overlay bar under the navbar.
-  const searchCtl = MCO.initSearchCollapse({
-    wrap:    document.getElementById('search-wrap'),
-    toggle:  document.getElementById('btn-search-toggle'),
-    input:   searchInput,
-    onClose: () => searchBox.close(),
-  });
-
-  // Landscape-phone rail (kit 0.10.0): the bar's contents move into a drawer
-  // beside a 56px rail. The drawer contract (focus in, everything else inert,
-  // Esc / scrim / toggle close, focus back to the toggle) is the kit's.
+  // The compact bar (kit 0.21.0) and the landscape rail (0.10.0): the bar's
+  // contents move into a drawer — a right drawer under a one-row bar on a
+  // phone, a drawer beside the 56px rail on a landscape phone. The drawer
+  // contract (focus in, everything else inert, Esc / scrim / ☰ close, focus
+  // back to the button that opened it) is the kit's. The search button
+  // opens the drawer on the field. On a compact bar ≤640px is always rail
+  // or drawer mode, so there is no collapsing overlay field any more
+  // (MCO.initSearchCollapse retired here).
   const railMenuBtn = document.getElementById('btn-rail-menu');
   const rail = MCO.initNavRail({
     toggle: railMenuBtn,
     drawer: document.getElementById('nav-drawer'),
     scrim:  document.getElementById('rail-scrim'),
+    search: { toggle: document.getElementById('btn-search-toggle'), input: searchInput },
   });
-  document.getElementById('btn-rail-search').addEventListener('click', () => rail.open(searchInput));
 
   // With ?kbd=off the '/' shortcut is disabled, so advertising it would be a
   // lie. (The kit already hides this hint inside the compact overlay bar.)
@@ -1057,24 +1086,14 @@
     if (kbdHint) kbdHint.hidden = true;
   }
 
-  function flyToCell(cellId) {
+  function flyToCell(cellId, { url = 'auto', zoom = SEARCH_FLY_ZOOM } = {}) {
     const c = cellById.get(cellId);
     if (!c) { MCO.showToast('Grid cell not found'); return; }
-    // A hidden category would fly the user to a blank patch of map — turn it
-    // back on rather than silently landing on nothing.
-    if (!currentCats().has(c.cat)) {
-      currentCats().add(c.cat);
-      refreshLegendVisuals();
-      applyAllFilters();
-    }
-    map.flyTo({
-      center: c.center, zoom: SEARCH_FLY_ZOOM,
-      speed: SEARCH_FLY_SPEED, animate: !MCO.reducedMotion(),
-    });
-    map.once('moveend', () => openPopupFor(cellId));
+    flyAndOpen(c.center, zoom, { cell: cellId },
+      () => ensureCatVisible(c.cat), () => openCell(cellId, { url }));
   }
 
-  // ── Popup ────────────────────────────────────────────────────────────────
+  // ── Detail content ───────────────────────────────────────────────────────
   // Built with DOM APIs, never HTML strings (HOUSE-STYLE §7): the shell, title,
   // subtitle, the .mco-facts list and the dashboard action come from the
   // kit's MCO.map.popupContent(); this map adds its status pill and notes.
@@ -1137,7 +1156,7 @@
     }, c.cat);
   }
 
-  // Shared facts for the cell popup above and the station popup below.
+  // Shared facts for the cell detail above and the station detail below.
   // `live` means "a real, installed station" — everything else is a proposal,
   // so the location reads as proposed and there is no install date to show.
   function stationFacts(s, live) {
@@ -1152,10 +1171,10 @@
     return facts;
   }
 
-  // Station-first popup, used when the click lands on a dot rather than a cell.
-  // The cell popup answers "what is happening in this cell"; a dot invites the
+  // Station-first detail, used when the click lands on a dot rather than a cell.
+  // The cell detail answers "what is happening in this cell"; a dot invites the
   // question "what is this station", so it gets its own answer. It also works
-  // for a station whose ace_grid names no drawn cell — the cell popup cannot,
+  // for a station whose ace_grid names no drawn cell — the cell detail cannot,
   // because it keys entirely off cellById and simply returns nothing.
   function stationPopupContent(stationId) {
     const s = stationById.get(stationId);
@@ -1183,33 +1202,35 @@
     }, cat, notes);
   }
 
-  // ── Detail: anchored popup on desktop, bottom sheet on compact ─────────
+  // ── Detail: the kit's sheet at every width ──────────────────────────────
   // One selection (a cell or a station, each with its own URL parameter) and
-  // one surface showing it. Above the compact breakpoint that is a MapLibre
-  // popup anchored to the feature; on compact it is the kit's bottom sheet
-  // (MCO.initSheet, kit 0.9.0) with the SAME popupContent() body — an
-  // anchored 320px popup covers most of a phone map and its tip points at a
-  // cell the finger is on top of. The sheet opens at peek (title, sub, status
-  // pill), drags or steps (the grip) to full, and closes on ×, Esc or a drag
-  // down; the map stays usable at peek.
+  // one surface showing it: MCO.initSheet, docked at the end edge on desktop
+  // and a bottom sheet on compact (kit 0.21.0; the anchored MapLibre popup
+  // this page showed on desktop retired). The body is popupContent(). On
+  // compact it opens at peek (title, sub, status pill), drags or steps (the
+  // grip) to full, and closes on ×, Esc or a drag down; the map stays
+  // usable at peek.
+  //
+  // History (HOUSE-STYLE §4): the first open from "no detail" pushes an
+  // entry, so Back closes it; switching cell or station while it is open
+  // replaces. Closing a pushed detail steps Back off its own entry rather
+  // than leaving a dead one that would reopen it. A deep link replaces: its
+  // entry is the page's own.
+  // The end-docked sheet starts under the navbar (top: --chrome-h); this
+  // navbar is not sticky, so the kit does not publish its height itself.
+  MCO.metrics.observe('--chrome-h', document.getElementById('navbar'));
   const detailSheetEl = document.getElementById('detail-sheet');
   const sheetTitleEl  = document.getElementById('detail-sheet-title');
   const sheetBodyEl   = detailSheetEl.querySelector('.mco-sheet-body');
-  let _detail = null;          // 'popup' | 'sheet' | null — what is showing
   let _detailClosing = false;  // a programmatic close: not the user dismissing it
   const sheet = MCO.initSheet({
     sheet: detailSheetEl,
     // Where focus goes when the sheet closes with no usable opener (a
     // ?station= / ?cell= deep link opens it with focus on <body>): <main>,
-    // the skip-link target, which holds the map. Since kit 0.11.3 the
-    // overlay honours this when the opener is <body> or hidden. The map
-    // canvas would be nicer, but it doesn't exist yet when this runs.
+    // the skip-link target, which holds the map.
     fallbackFocus: document.getElementById('main'),
     onState: (st) => {
-      if (st === 'closed' && _detail === 'sheet' && !_detailClosing) {
-        _detail = null;
-        clearSelection();
-      }
+      if (st === 'closed' && !_detailClosing) closeDetail();
     },
   });
 
@@ -1218,8 +1239,8 @@
     if (_selectedStation) return stationPopupContent(_selectedStation);
     return null;
   }
-  // The sheet has its own title element, so the popup body's title moves
-  // there; the status pill marks the peek height.
+  // The sheet has its own title element, so the body's title moves there;
+  // the status pill marks the peek height.
   function fillSheet(frag) {
     const root = frag.querySelector('.mco-popup');
     const t = root.querySelector('.mco-popup-title');
@@ -1231,94 +1252,71 @@
   }
   // Re-render whatever is open (a theme switch recolors the pill).
   function refreshDetail() {
+    if (sheet.state() === 'closed') return;
+    const content = detailContent();
+    if (content) fillSheet(content);
+  }
+
+  // url: 'auto' pushes the first open and replaces after that; 'replace'
+  // for a deep link; 'none' when Back/Forward already moved the URL.
+  function showDetail(url) {
     const content = detailContent();
     if (!content) return;
-    if (_detail === 'popup' && _popup) _popup.setDOMContent(content);
-    else if (_detail === 'sheet') fillSheet(content);
+    fillSheet(content);
+    sheet.open('peek', { opener: document.activeElement });
+    if (url === 'none') return;
+    if (url === 'auto' && !(history.state && history.state.mcoDetail)) pushState({ push: true });
+    else pushState();
   }
 
-  // Take down the current surface without touching the selection or the URL.
-  function dismissDetail(restoreFocus) {
-    _detailClosing = true;
-    if (_popup) {
-      // Removing a popup that holds focus drops it to <body>; hand it to the
-      // map instead (WCAG 2.4.3).
-      const had = _popup.getElement().contains(document.activeElement);
-      _popup.remove();
-      _popup = null;
-      if (had && restoreFocus) map.getCanvas().focus();
-    }
-    if (_detail === 'sheet') sheet.close({ restoreFocus: !!restoreFocus });
-    _detail = null;
-    _detailClosing = false;
-  }
-
-  function clearSelection() {
-    if (!_selectedCell && !_selectedStation) return;
-    _selectedCell = null;
-    _selectedStation = null;
-    pushState();
-  }
-
-  function showDetail(lngLat) {
-    const content = detailContent();
-    if (!content) return;
-    if (MCO.viewport.isCompact()) {
-      fillSheet(content);
-      _detail = 'sheet';
-      sheet.open('peek', { opener: document.activeElement });
-      return;
-    }
-    const p = new maplibregl.Popup({ closeOnClick: false, maxWidth: '320px', offset: 12 })
-      .setLngLat(lngLat)
-      .setDOMContent(content)
-      .addTo(map);
-    p.on('close', () => {
-      if (_detailClosing || _popup !== p) return;
-      _popup = null;
-      _detail = null;
-      clearSelection();
-    });
-    _popup = p;
-    _detail = 'popup';
-  }
-
-  function openStationPopup(stationId, lngLat) {
-    const s = stationById.get(stationId);
-    if (!s) return;
-    dismissDetail(false);
+  function openStation(stationId, { url = 'auto' } = {}) {
+    if (!stationById.has(stationId)) return;
+    cancelFlight();
     _selectedCell = null;
     _selectedStation = stationId;
-    showDetail(lngLat || [s.longitude, s.latitude]);
+    showDetail(url);
     announceStation(stationId);
-    pushState();
   }
 
-  function openPopupFor(cellId, lngLat) {
-    const c = cellById.get(cellId);
-    if (!c) return;
-    dismissDetail(false);
+  function openCell(cellId, { url = 'auto' } = {}) {
+    if (!cellById.has(cellId)) return;
+    cancelFlight();
     _selectedStation = null;
     _selectedCell = cellId;
-    showDetail(lngLat || c.center);
+    showDetail(url);
     announceCell(cellId);
-    pushState();
   }
 
-  // The user closed the detail (Esc, an empty-map click): take it down and
-  // clear the selection.
-  function closePopup() {
-    if (!_detail) return;
-    dismissDetail(true);
-    clearSelection();
+  // Close the detail and clear the selection. fromHistory: Back/Forward
+  // already moved the URL, so just reflect it. Returns whether anything was
+  // open.
+  function closeDetail({ fromHistory = false } = {}) {
+    cancelFlight();
+    if (!_selectedCell && !_selectedStation) return false;
+    _selectedCell = null;
+    _selectedStation = null;
+    if (sheet.state() !== 'closed') {
+      _detailClosing = true;
+      sheet.close();
+      _detailClosing = false;
+    }
+    if (fromHistory) return true;
+    if (history.state && history.state.mcoDetail) { _steppingBack = true; history.back(); }
+    else pushState();
+    return true;
   }
+  // Set while closeDetail steps Back off the detail's own entry: the entry
+  // it lands on still carries the camera from before the detail opened.
+  let _steppingBack = false;
 
   // ── URL state push ───────────────────────────────────────────────────────
   // Lists are space-joined; URLSearchParams encodes spaces as '+', giving tidy
   // URLs like overlays=counties+hucs. Enum-string values are lowercase.
   // Every parameter has a default and none is written while it matches, so a
   // fresh load carries no query string at all (HOUSE-STYLE §4).
-  function pushState() {
+  // {push: true} adds a history entry (the detail opening, see showDetail);
+  // everything else replaces.
+  function pushState({ push = false } = {}) {
     const params = {};
     if (activeView === 'internal') params.internal = '1';
     // Per-view category sets: only serialize when not the full set.
@@ -1348,44 +1346,67 @@
     // atDefaultExtent().
     if (_mapReady) Object.assign(params, MCO.map.cameraParamsIfDefault(map));
     if (_selectedCell) params.cell = _selectedCell;
-    if (_selectedStation) params.station = _selectedStation;
-    MCO.replaceUrlState(params);
+    else if (_selectedStation) params.station = _selectedStation;
+    else if (_pendingDetail) Object.assign(params, _pendingDetail);
+    if (push) MCO.pushUrlState(params, { state: { mcoDetail: _selectedStation || _selectedCell } });
+    else MCO.replaceUrlState(params);
   }
 
-  // Global keyboard shortcuts: Esc closes things; / focuses search.
-  // Escape is unaffected by ?kbd=off — it's a modifier-free key, but it only
-  // acts on already-open UI, so it can't be misfired into.
+  // Back/Forward: the cell or station is the only drill-down state, so the
+  // detail follows the URL; the rest of the view stays as it is and is
+  // mirrored back into the restored entry.
+  MCO.onUrlState((p) => {
+    // Our own step Back (× on a pushed detail): just mirror the live view.
+    if (!p.has('station') && !p.has('cell') && _steppingBack) {
+      _steppingBack = false;
+      pushState();
+      return;
+    }
+    const st = MCO.getParamLower('station', p);
+    const cell = p.get('cell') ? normalizeCell(p.get('cell')) : null;
+    if (st && stationById.has(st)) {
+      if (st === _selectedStation) return;
+      openStation(st, { url: 'none' });
+    } else if (cell && cellById.has(cell)) {
+      if (cell === _selectedCell) return;
+      openCell(cell, { url: 'none' });
+    } else if (!closeDetail({ fromHistory: true })) {
+      return;
+    } else {
+      MCO.announce('Details closed.');
+    }
+    pushState();
+  });
+
+  // Global keyboard shortcut: / focuses search. (Esc is the kit's: the
+  // sheet, the drawer, the dialog and the spider each take their turn on
+  // MCO.escStack.)
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closePopup(); return; }
     if (kbdShortcuts && e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
       const t = e.target;
       const inField =
         t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
       if (inField) return;
       e.preventDefault();
-      // On the landscape-phone rail the field lives in the closed drawer.
-      if (rail.isRail()) { rail.open(searchInput); return; }
-      // When the field is collapsed the overlay has to open first — otherwise
-      // '/' focuses an input that is display:none and the keystroke is lost.
-      if (searchCtl.isCollapsed()) { searchCtl.open(); return; }
+      // On a phone (the compact drawer or the landscape rail) the field
+      // lives in the closed drawer: open it on the field.
+      if (rail.isRail() || rail.isDrawerMode()) { rail.open(searchInput); return; }
       searchInput.focus();
       searchInput.select();
     }
   });
   // The kit's combobox owns the list keys. An Escape it did not consume (the
-  // list is closed and the field already empty) dismisses the compact overlay
-  // bar and hands focus back to the toggle — blurring alone would strand
-  // focus behind a still-open overlay.
+  // list is closed and the field already empty) leaves the field on the
+  // desktop bar; in a drawer it passes through, and the drawer closes.
   searchInput.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
-    if (searchCtl.isOpen()) { e.stopPropagation(); searchCtl.close(); return; }
-    searchInput.blur();
+    if (!rail.isOpen()) searchInput.blur();
   });
 
   // ── Refresh (manual data reload) ─────────────────────────────────────────
   function refreshData() {
     if (!_mapReady) return;   // the first load is still on its way
-    refreshStampEl.textContent = 'loading…';
+    refreshStampEl.textContent = 'Loading…';
     loadAll();
   }
   document.getElementById('btn-refresh').addEventListener('click', refreshData);
@@ -1563,6 +1584,7 @@
 
   // ── Map construction (after MapLibre 6 has loaded) ─────────────────────
   let zoomFloor = null;
+  let coloc = null;
   function initMap() {
     map = new maplibregl.Map({
       container: 'map',
@@ -1578,6 +1600,33 @@
     // zoom that fits MT is viewport-dependent).
     zoomFloor = MCO.map.installZoomFloor(map);
 
+    // Colocation + the one click dispatcher (MCO.map.colocation, kit 0.21.0).
+    // A station dot opens the station; a stacked site also fans out. A click
+    // on no station falls through to the cell under it, so a dot and its
+    // cell can't double-fire. A dot is a station, so it opens the station:
+    // only a cell click resolves through cellById, which is also why a
+    // station whose ace_grid names no drawn cell stays clickable.
+    coloc = MCO.map.colocation(map, {
+      source: 'stations',
+      visible: (s) => currentCats().has(stationCat(s)),
+      properties: (s) => ({
+        station: s.station,
+        name:    s.name || s.station,
+        cell:    normalizeCell(s.ace_grid),
+        cat:     stationCat(s),
+      }),
+      anchorLayers: ['stations-layer', 'stations-badge', 'stations-badge-disc'],
+      spiderLayers: ['stations-spider'],
+      onSelect: (id) => openStation(id),
+      onEmpty: (e) => {
+        const feats = map.getLayer('cells-fill')
+          ? map.queryRenderedFeatures(e.point, { layers: ['cells-fill'] }) : [];
+        const cell = feats.length ? normalizeCell(feats[0].properties.cell) : null;
+        if (cell && cellById.has(cell)) openCell(cell);
+        else closeDetail();
+      },
+    });
+
     // Chips first: addCustomLayers() kicks off any saved overlay fetches, and
     // those want a chip to hang their busy/error state on.
     buildLayerChips();
@@ -1592,38 +1641,19 @@
     map.on('style.load', onStyleLoad);
 
     // Reflect every pan/zoom in the URL so the view is sharable
-    map.on('moveend', pushState);
-
-    // ── Click handling ───────────────────────────────────────────────────────
-    // One dispatcher so a station dot and the cell beneath it can't double-fire.
-    map.on('click', (e) => {
-      const layers = ['stations-layer', 'cells-fill'].filter(l => map.getLayer(l));
-      const feats = layers.length ? map.queryRenderedFeatures(e.point, { layers }) : [];
-      if (feats.length === 0) { closePopup(); return; }
-      const f = feats.find(x => x.layer.id === 'stations-layer') || feats[0];
-      // A dot is a station, so it opens the station. Only a cell click resolves
-      // through cellById — which is also why a station whose ace_grid names no
-      // drawn cell used to be unclickable: the lookup failed and the handler bailed.
-      if (f.layer.id === 'stations-layer') {
-        openStationPopup(f.properties.station, f.geometry.coordinates.slice());
-        return;
-      }
-      const cell = normalizeCell(f.properties.cell);
-      if (!cellById.has(cell)) { closePopup(); return; }
-      openPopupFor(cell, e.lngLat);
-    });
+    map.on('moveend', () => pushState());
 
     // ── Hover tooltip ────────────────────────────────────────────────────────
     // The kit's cursor tooltip (kit 0.8.0) owns the mousemove dispatcher,
     // cursor+14 positioning (flipped at the viewport edge), cursor: pointer and
     // the mouseleave cleanup, and sets every line with textContent. A dot is
     // queried before the cell under it. Decorative (aria-hidden): the same
-    // facts reach AT through the popup announcement and the table twin.
+    // facts reach AT through the detail announcement and the table twin.
     MCO.map.initCursorTooltip(map, {
       element: document.getElementById('tooltip'),
-      layers: ['stations-layer', 'cells-fill'],
+      layers: ['stations-spider', 'stations-layer', 'cells-fill'],
       render: (f) => {
-        if (f.layer.id === 'stations-layer') {
+        if (f.layer.id !== 'cells-fill') {
           // Hovering a dot asks about the station, and must work even when
           // its ace_grid names no drawn cell.
           const s = stationById.get(f.properties.station);

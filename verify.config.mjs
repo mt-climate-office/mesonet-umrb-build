@@ -15,7 +15,7 @@ const dataDrew = () => {
   const rows = [...document.querySelectorAll('#sr-cell-rows tr')];
   return rows.length >= 200
     && rows.some((r) => /Operational/.test(r.textContent))
-    && /^loaded /.test(document.getElementById('refresh-stamp')?.textContent || '');
+    && /^Updated .* M[SD]T$/.test(document.getElementById('refresh-stamp')?.textContent || '');
 };
 
 export default {
@@ -24,16 +24,56 @@ export default {
   // The intro modal opens on a first visit; seed its seen-key so it does not
   // sit over every scenario. (Its own behavior is exercised by keyboard.mjs
   // through the info button.)
-  storage: { 'mco-status-seen-intro': '1' },
+  storage: { 'mco-umrb-seen-intro': '1' },
   scenarios: [
     { name: 'default', query: '', ready: dataDrew },
-    // Station deep link: a station popup (desktop) or the station sheet
-    // (compact, kit 0.9.0 pass 2) carrying that station's name.
+    // Station deep link (kit 0.21.0): the detail sheet at every width —
+    // end-docked at 1440, the bottom sheet at 390 — carrying the station's
+    // name. aceabsar (Absarokee) is active in the live registry
+    // (/stations/status/live, checked 2026-11-03).
     {
       name: 'station', query: '?station=aceabsar',
       ready: () => {
-        const el = document.querySelector('.maplibregl-popup, .mco-sheet:not([hidden]):not([data-state="closed"])');
+        const el = document.querySelector('.mco-sheet:not([hidden]):not([data-state="closed"])');
         return !!el && /Absarokee/i.test(el.textContent);
+      },
+    },
+    // The same link under a camera that does not show the station: the
+    // flight must still end with the sheet open.
+    {
+      name: 'station-camera', query: '?station=aceabsar&lng=-104.5&lat=48.5&zoom=7',
+      ready: () => {
+        const el = document.querySelector('.mco-sheet:not([hidden]):not([data-state="closed"])');
+        return !!el && /Absarokee/i.test(el.textContent);
+      },
+    },
+    // The compact drawer open (at 390; at 1440 there is no drawer and the
+    // bar is checked as is). The ready function opens it once the data has
+    // drawn: scenarios carry no actions, and it runs in the page.
+    {
+      name: 'drawer-open', query: '',
+      ready: () => {
+        const rows = document.querySelectorAll('#sr-cell-rows tr').length >= 200;
+        if (!rows) return false;
+        const menu = document.getElementById('btn-rail-menu');
+        const drawer = document.getElementById('nav-drawer');
+        if (!menu.getClientRects().length) return true;   // desktop: no drawer
+        if (!drawer.classList.contains('is-open')) menu.click();
+        return drawer.classList.contains('is-open') && document.activeElement && drawer.contains(document.activeElement);
+      },
+    },
+    // A chip toggle: Stations off. The dots, badge and spider hide and the
+    // URL carries stations=off. (An overlay chip would stream a .fgb, whose
+    // aborted read Chrome logs as an error; see CLAUDE.md.)
+    {
+      name: 'chip-toggle', query: '',
+      ready: () => {
+        const rows = document.querySelectorAll('#sr-cell-rows tr').length >= 200;
+        if (!rows) return false;
+        const chip = document.querySelector('#layer-filters .mco-chip[data-layer="stations"]');
+        if (!chip) return false;
+        if (chip.getAttribute('aria-pressed') === 'true') chip.click();
+        return chip.getAttribute('aria-pressed') === 'false' && /stations=off/.test(location.search);
       },
     },
     { name: 'internal', query: '?internal=1', ready: dataDrew },
@@ -46,8 +86,35 @@ export default {
   dialogOpener: '.mco-btn-info',
   shortcuts: [{ key: '/', effect: () => document.activeElement?.id === 'search-input' || !!document.querySelector('.mco-search-collapse.is-open, [aria-expanded="true"].mco-search-toggle') }],
   probes: async ({ open, check }) => {
+    const sheetOpen = () => {
+      const el = document.querySelector('.mco-sheet');
+      return !!el && !el.hidden && el.dataset.state !== 'closed';
+    };
     const s = await open('?station=aceabsar');
     check('?station= re-emitted in the URL', await s.page.evaluate(() => /station=aceabsar/.test(location.search)));
+    // The end-docked sheet starts under the navbar, so its title and ×
+    // are not covered (top: --chrome-h, published by app.js).
+    await s.page.waitForFunction(sheetOpen, null, { timeout: 20000 });
+    check('?station= sheet head clear of the navbar', await s.page.evaluate(() =>
+      document.querySelector('.mco-sheet-head').getBoundingClientRect().top
+        >= Math.round(document.getElementById('navbar').getBoundingClientRect().bottom) - 1));
+    // Back closes a detail opened from "no detail": the search pick pushes
+    // one history entry, and Back closes the sheet in the same document.
+    await s.page.keyboard.press('Escape');
+    await s.page.waitForTimeout(500);
+    check('Esc closes the deep-linked sheet and drops ?station=', await s.page.evaluate(() =>
+      document.querySelector('.mco-sheet').dataset.state === 'closed' && !/station=/.test(location.search)));
+    const h0 = await s.page.evaluate(() => history.length);
+    await s.page.fill('#search-input', 'aceabsar');
+    await s.page.keyboard.press('ArrowDown');
+    await s.page.keyboard.press('Enter');
+    await s.page.waitForFunction(sheetOpen, null, { timeout: 20000 });
+    check('a search pick pushes one history entry', (await s.page.evaluate(() => history.length)) === h0 + 1);
+    await s.page.evaluate(() => { window.__sameDoc = true; history.back(); });
+    await s.page.waitForFunction(() => document.querySelector('.mco-sheet').dataset.state === 'closed', null, { timeout: 5000 }).catch(() => {});
+    check('Back closes the sheet in the same document', await s.page.evaluate(() =>
+      window.__sameDoc === true && document.querySelector('.mco-sheet').dataset.state === 'closed'
+        && !/station=/.test(location.search)));
     await s.close();
     const k = await open('?kbd=off');
     check('?kbd=off sticks in the URL', await k.page.evaluate(() => /kbd=off/.test(location.search)));

@@ -200,6 +200,7 @@
        Field, icon and listbox are the kit's .mco-search (MCO.initSearchBox).
        Only the "/" hint is this page's: room for it on the right of the
        field, and the hint itself. */
+    /* kit-override: room on the right of the field for the "/" hint. */
     .mco-search .mco-search-input { padding-right: 30px; }
     .search-kbd {
       position: absolute;
@@ -218,23 +219,10 @@
     #search-wrap:focus-within .search-kbd { opacity: 0; }
 
     /* ── Layer chips (navbar toggles) ─────────────────────────────────────
-       The kit's .mco-chips / .mco-chip (0.9.0): pressed adds a ✓, so the
-       state is not color alone; 40px on touch. */
-    /* kit-override: .mco-chips wraps. In this navbar, at phone width, the
-       four chips only just fit one row, so a wrap starts the moment a second
-       chip gains its ✓ — the navbar grows 100 → 147px and the map jumps
-       under the finger that pressed it. Keep the row on one line and let it
-       scroll sideways instead; the padding keeps focus rings unclipped. */
-    @media (max-width: 640px) {
-      #layer-filters.mco-chips {
-        flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
-        flex: 1 1 0; min-width: 0;
-        margin: -4px; padding: 4px;
-      }
-      /* …and its flex parent must be allowed to be narrower than the row. */
-      #navbar .controls { min-width: 0; }
-      #layer-filters.mco-chips::-webkit-scrollbar { display: none; }
-    }
+       The kit's .mco-chips / .mco-chip: pressed adds a ✓, so the state is
+       not color alone; --control-h tall in the bar (kit 0.21.0). On a phone
+       they sit in the compact drawer, where they wrap freely, so the old
+       one-line scroll override is gone with the two-row bar. */
 
     /* ── Legend (bottom-left, collapsible) ────────────────────────────────── */
     /* The panel shell, its header/title/toggle, the caret rotation and the
@@ -255,6 +243,8 @@
       border-top: 1px solid var(--border-glass);
       font-size: 0.78rem; color: var(--text-secondary);
     }
+    /* kit-override: the static station row's dot is drawn at marker size,
+       smaller than the kit's category swatch, so it reads as a dot. */
     .legend-static .mco-legend-swatch { width: 10px; height: 10px; margin: 0 2px; }
     .legend-hint {
       margin-top: 6px; padding: 0 4px;
@@ -267,10 +257,11 @@
       color: var(--text-muted);
     }
 
-    /* ── Popup ─────────────────────────────────────────────────────────────── */
-    /* The shell (surface, border, tip, close button, --z-detail tier), the
-       title/subtitle, the .mco-facts list and the action bar are the kit's
-       (MCO.map.popupContent). Left here: this map's status pill and notes. */
+    /* ── Detail body (in the sheet) ───────────────────────────────────────── */
+    /* The body is the kit's MCO.map.popupContent() (title/subtitle, the
+       .mco-facts list, the action bar), shown in the kit's sheet at every
+       width (kit 0.21.0: the anchored map popup retired). Left here: this
+       map's status pill and notes. */
     .pop-pill {
       display: inline-block; font-size: 0.64rem; font-weight: 600; padding: 2px 8px;
       border-radius: 999px; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.04em;
@@ -283,42 +274,29 @@
     .pop-empty { margin: 6px 0 0; font-size: 0.72rem; color: var(--text-muted); font-style: italic; }
 
     /* ── Responsive ────────────────────────────────────────────────────────── */
-    /* The kit owns the ladder above this: the ≤1400px button-label shed and the
-       ≤750px collapse of the brand lockup to the logo badge (title and subtitle
-       are hidden visually, not removed, so the <h1> outline survives). This map
-       adds only its own controls break.
-
-       Ladder rule (Kyle, 2026-10-09): a bar that can't fit one row at the
-       1060 rung sheds at the 1400 rung and stays on the ladder — no
-       off-ladder 1200 break. This bar needs ~1220px on one row with every
-       chip pressed, so at ≤1400px it sheds ~180px:
-       - the refresh stamp goes icon-only: the live dot stays, the text is
-         visually hidden but still read by AT, and the time is the
-         wrapper's title (app.js keeps it current);
-       - the search field narrows 220 → 160px (back to 220 on the second
-         row at 641–1060, where it has the room).
-       That keeps one row from 1061 to 1440. At ≤1060 the primary controls
-       (search + chips) drop to a dedicated second row; CSS `order` swaps the
-       visual position without disturbing tab order. */
+    /* The kit owns the ladder: the ≤1400px button-label shed and the
+       "Updated" word drop in .refresh-status (kit 0.21.0), the ≤750px
+       collapse of the brand lockup to the logo badge, and, through
+       data-rail="compact" on the navbar, the one-row phone bar with the
+       rest in a right drawer. This bar needs ~1190px on one row with every
+       chip pressed (34px chips, and since 0.21.0 the stamp keeps its time
+       at ≤1400px, ~95px), so it sheds at the 1400 rung and stays one row
+       from 1061 to 1440 (ladder rule, Kyle, 2026-10-09; measured one row
+       down to ~1040 with all four chips pressed): the search field narrows
+       220 → 100px and drops its "/" hint (the shortcut still works, and the
+       info dialog lists it). The old ≤1060 second row (CSS `order` /
+       `flex-basis` swaps) is gone: below 1061 the bar wraps the kit's way,
+       and on a phone it is one row. */
     @media (max-width: 1400px) {
-      #refresh-stamp {
-        position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
-        overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-      }
-      #search-input { width: 160px; }
+      #search-input { width: 100px; }
+      /* kit-override: no room for the hint; the field's padding comes back. */
+      .mco-search .mco-search-input { padding-right: 10px; }
+      .search-kbd { display: none; }
     }
-    @media (max-width: 1060px) {
-      .nav-meta  { order: 1; gap: 0.3rem; }
-      .controls  { order: 2; flex-basis: 100%; margin-left: 0; }
-    }
+    /* Below 1061 the bar wraps, so the field has its room back; at 160px
+       its placeholder runs under the "/" hint. */
     @media (min-width: 641px) and (max-width: 1060px) {
       #search-input { width: 220px; }
-    }
-    /* At ≤640px the kit collapses the search field into its disclosure button,
-       so the field's own width rules no longer apply: it is either display:none
-       or flexed to fill the overlay bar. */
-    @media (max-width: 640px) {
-      .refresh-status { display: none; }   /* reclaim space on phones */
     }
     /* WCAG 2.5.5 — touch targets on touch-only devices: every control on
        this page is a kit control now (.nav-btn, .mco-btn-info,
@@ -331,12 +309,15 @@
 <!-- WCAG 2.4.1 — first focusable element on the page, jumps past the navbar. -->
 <a class="mco-skip-link" href="#main">Skip to map</a>
 
-<!-- data-rail (kit 0.10.0): on a landscape phone the two-row bar ate ~30%
-     of the height (100 of 342px), so there it becomes a 56px left rail with a
-     menu and a search button, and .mco-nav-drawer — display:contents
-     everywhere else, so the bar lays out exactly as before — opens beside it
-     (MCO.initNavRail). -->
-<header id="navbar" class="mco-navbar" data-rail>
+<!-- data-rail="compact" (kit 0.21.0): on a phone the bar is ONE row — the
+     logo badge at the left edge, the search button, ☰ at the right edge —
+     and .mco-nav-drawer (brand, search field, chips, stamp, buttons) opens
+     as a right drawer under it. On a landscape phone the same .mco-rail
+     children make the 56px left rail (kit 0.10.0). Everywhere else
+     .mco-nav-drawer is display:contents, so the desktop bar is unchanged.
+     No hot controls: this map has no control a visitor repeats on the map
+     (no date, no mode); search is the primary action. -->
+<header id="navbar" class="mco-navbar" data-rail="compact">
   <a href="https://climate.umt.edu" target="_blank" rel="noopener noreferrer"
      class="logo-link" aria-label="Montana Climate Office">
     <!-- Vendored, not hot-linked: img-src is enumerated in the CSP above, and a
@@ -350,7 +331,11 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="2"
            stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
     </button>
-    <button type="button" class="nav-btn icon-only" id="btn-rail-search" aria-label="Search stations">
+    <!-- Last in .mco-rail: on a phone it opens the drawer on the search
+         field (MCO.initNavRail's search option). -->
+    <button type="button" class="nav-btn icon-only mco-search-toggle" id="btn-search-toggle"
+            aria-expanded="false" aria-controls="nav-drawer"
+            title="Search stations" aria-label="Search stations">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -370,13 +355,13 @@
   <div class="controls">
     <!-- Primary action: search a station. Press / anywhere to jump here.
          The kit's combobox (.mco-search + MCO.initSearchBox, which sets the
-         role/aria-* on the field and the list); .mco-search-collapse hands the
-         ≤640px collapse to the kit too. -->
+         role/aria-* on the field and the list). .mco-search-collapse lets
+         the kit show the field inside the compact drawer. -->
     <div class="mco-search mco-search-collapse" id="search-wrap">
       <span class="mco-search-icon" aria-hidden="true"></span>
       <label for="search-input" class="sr-only">Search stations</label>
       <input type="search" id="search-input" class="mco-search-input"
-             placeholder="Search stations…">
+             placeholder="Search…">
       <kbd class="search-kbd" aria-hidden="true">/</kbd>
       <div class="mco-search-list" id="search-dropdown" hidden></div>
     </div>
@@ -386,20 +371,11 @@
   </div>
 
   <div class="nav-meta">
-    <span class="refresh-status" title="Last refreshed">
+    <!-- Freshness stamp: MCO.formatUpdatedMT fills the text span (app.js). -->
+    <span class="refresh-status">
       <span class="dot" aria-hidden="true"></span>
-      <span id="refresh-stamp">loading…</span>
+      <span id="refresh-stamp">Loading…</span>
     </span>
-    <!-- Search disclosure — only rendered by the kit at ≤640px, where the
-         inline field collapses. aria-controls points at the wrapper it opens. -->
-    <button type="button" class="nav-btn icon-only mco-search-toggle" id="btn-search-toggle"
-            aria-expanded="false" aria-controls="search-wrap"
-            title="Search stations" aria-label="Search stations">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-      </svg>
-    </button>
     <button type="button" class="nav-btn icon-only" id="btn-labels" aria-pressed="false"
             title="Toggle grid cell labels" aria-label="Toggle grid cell labels">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2"
@@ -481,10 +457,11 @@
 </table>
 </main>
 
-<!-- Detail sheet (MCO.initSheet): on compact the cell/station detail opens
-     here instead of an anchored popup. Its body is the same popupContent()
-     the popup shows; app.js fills the title and body. Not a dialog: it is not
-     modal at peek, and the kit makes the rest inert only at full. -->
+<!-- Detail sheet (MCO.initSheet): the cell/station detail at every width —
+     docked at the end edge on desktop, a bottom sheet on compact (kit 0.21.0
+     retired the anchored map popup). Its body is MCO.map.popupContent();
+     app.js fills the title and body. Not a dialog: it is not modal at peek,
+     and the kit makes the rest inert only at full on compact. -->
 <section class="mco-sheet" id="detail-sheet" aria-labelledby="detail-sheet-title" data-state="closed" hidden>
   <div class="mco-sheet-head">
     <button type="button" class="mco-sheet-grip" aria-label="Expand details" aria-expanded="false"></button>
@@ -521,9 +498,10 @@
         <li><strong>Search</strong> — press <kbd>/</kbd> to jump there; <kbd>↑</kbd>/<kbd>↓</kbd> + <kbd>Enter</kbd> to pick.</li>
         <li><strong>Legend</strong> — click a row to hide a status; double-click (or <kbd>Shift</kbd>+<kbd>Enter</kbd>) to isolate it.</li>
         <li><strong>Layers</strong> — chips toggle station dots and the county / watershed / tribal-land reference overlays.</li>
-        <li><strong>Hover</strong> a cell for its status; <strong>click</strong> for station details and a dashboard link.</li>
+        <li><strong>Hover</strong> a cell for its status; <strong>click</strong> it, or a station dot, to open its details beside the map, with a dashboard link.</li>
         <li>The tag button toggles <strong>grid cell labels</strong>; the theme button steps dark → light → high contrast.</li>
-        <li><kbd>Esc</kbd> closes any open popup or detail sheet.</li>
+        <li><kbd>Esc</kbd>, × or the browser's <strong>Back</strong> button closes the details.</li>
+        <li>On a phone, <strong>☰</strong> opens the menu with search, the layers and the buttons.</li>
         <li>Single-key shortcuts get in the way of speech input: add <code>?kbd=off</code> to the URL to turn <kbd>/</kbd> off.</li>
       </ul>
     </div>

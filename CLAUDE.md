@@ -14,10 +14,13 @@ https://github.com/mt-climate-office/mco-web-style — tokens only (no raw hexes
 a live region + sr-only table twin. To change shared styling, change the kit and
 bump the pinned version here; never patch a local copy.
 
-App-local by deliberate kit decision (do NOT extract): the cell-status ramp
-(`VIEWS` in `app.js`, with separate light/dark hexes per status — the one place
-raw hexes are allowed, as data-vis colors), the cell/station search combobox,
-and the legend rendering.
+The cell-status colors are the kit's map category sets since 0.21.0
+(`MCO.palette.categorySet('umrb-public' | 'umrb-internal', theme)`, read in
+`VIEWS` in `app.js`), with their 0.9 fill opacity; change them in the kit, not
+here. App-local by deliberate kit decision (do NOT extract): the cell/station
+search combobox and the legend rendering. Every localStorage key is
+`mco-umrb-*` (the page shares an origin with mesonet-status; `app.js` §
+Storage keys migrates the old `mco-status-*` ones).
 
 ## Data
 
@@ -53,7 +56,7 @@ back to `main`** — always pull/rebase before pushing, or you race it. Each of
 those commits is itself a Pages redeploy.
 
 `scripts/generate_preview.py` screenshots the live Pages origin (1200×630 layout at 2×, so 2400×1260) with
-`?theme=light`, pre-setting `mco-status-seen-intro` so the intro modal stays
+`?theme=light`, pre-setting `mco-umrb-seen-intro` so the intro modal stays
 shut, and waits on the same `#sr-cell-rows` readiness signal as the harness.
 That param, that localStorage key, and that table id are a contract — renaming
 any of them silently breaks the social card in production.

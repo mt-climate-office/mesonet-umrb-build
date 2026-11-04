@@ -20,7 +20,7 @@ Other features:
 - **Search box** for cells and stations with a themed dropdown, keyboard navigation (`↑` `↓` `Enter`), and a `/` global shortcut (`?kbd=off` disables it).
 - **Interactive legend** — click a row to hide that status; double-click (or <kbd>Shift</kbd>+<kbd>Enter</kbd>) to isolate it.
 - **Layer chips** toggle station dots and the county, watershed (HUC6), and tribal-land reference overlays, streamed as FlatGeobuf from the MCO data service.
-- **Hover** a cell for its status; **click** for station details and a dashboard link. `?station=` opens a station popup even when its `ace_grid` names no drawn cell.
+- **Hover** a cell for its status; **click** for station details and a dashboard link, in a side sheet (a bottom sheet on a phone); Back closes it. `?station=` opens the station even when its `ace_grid` names no drawn cell.
 - **Toggleable grid-cell labels**; hillshade relief; Montana outline.
 - **Light / dark / high-contrast** themes on neutral [CARTO](https://carto.com/basemaps) basemaps; honors `prefers-reduced-motion` and `prefers-color-scheme`.
 - Screen-reader table twin of the map (one row per cell) and a first-visit help dialog.
@@ -41,8 +41,8 @@ Every piece of UI state is mirrored to the URL. Parameters appear only when they
 | `theme` | `light` \| `dark` \| `high-contrast` | Emitted only when it differs from the OS preference |
 | `kbd` | `off` | Disables the `/` search shortcut |
 | `lng`, `lat`, `zoom` | floats | Camera, emitted as a set when not at the Montana extent |
-| `cell` | cell id (e.g. `H-8`) | Opens that cell's popup on load |
-| `station` | station id (e.g. `aceabsar`) | Opens that station's popup on load |
+| `cell` | cell id (e.g. `H-8`) | Opens that cell's details on load |
+| `station` | station id (e.g. `aceabsar`) | Opens that station's details on load |
 
 Precedence per setting: URL param > `localStorage` > built-in default. Enum values are matched case-insensitively; list params accept `+`, spaces, or commas.
 
