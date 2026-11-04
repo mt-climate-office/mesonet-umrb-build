@@ -1261,8 +1261,9 @@
   // replaces. Closing a pushed detail steps Back off its own entry rather
   // than leaving a dead one that would reopen it. A deep link replaces: its
   // entry is the page's own.
-  // The end-docked sheet starts under the navbar (top: --chrome-h); this
-  // navbar is not sticky, so the kit does not publish its height itself.
+  // The bar's height as --chrome-h, which the kit's phone bottom sheet keeps
+  // clear of (its full-detent max-height). The end-docked sheet measures the
+  // bar itself since kit 0.21.1.
   MCO.metrics.observe('--chrome-h', document.getElementById('navbar'));
   const detailSheetEl = document.getElementById('detail-sheet');
   const sheetTitleEl  = document.getElementById('detail-sheet-title');
