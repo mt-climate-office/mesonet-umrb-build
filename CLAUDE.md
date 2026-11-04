@@ -7,7 +7,7 @@ the API, the MCO data CDN, and the CDN-pinned libraries in `index.html`.
 ## House style
 
 This app consumes mco-web-style (pinned + SRI in `index.html`; currently
-**v0.16.2** — check the tag in that file rather than trusting this line). Design
+**v0.21.0** — check the tag in that file rather than trusting this line). Design
 tokens, a11y mandates, and interaction conventions: see HOUSE-STYLE.md in
 https://github.com/mt-climate-office/mco-web-style — tokens only (no raw hexes),
 `--accent` is fill-only, `aria-pressed` drives toggle styling, canvas data needs
@@ -17,7 +17,9 @@ bump the pinned version here; never patch a local copy.
 App-local by deliberate kit decision (do NOT extract): the cell-status ramp
 (`VIEWS` in `app.js`, with separate light/dark hexes per status — the one place
 raw hexes are allowed, as data-vis colors), the cell/station search combobox,
-and the legend rendering.
+and the legend rendering. Every localStorage key is
+`mco-umrb-*` (the page shares an origin with mesonet-status; `app.js` §
+Storage keys migrates the old `mco-status-*` ones).
 
 ## Data
 
@@ -53,7 +55,7 @@ back to `main`** — always pull/rebase before pushing, or you race it. Each of
 those commits is itself a Pages redeploy.
 
 `scripts/generate_preview.py` screenshots the live Pages origin (1200×630 layout at 2×, so 2400×1260) with
-`?theme=light`, pre-setting `mco-status-seen-intro` so the intro modal stays
+`?theme=light`, pre-setting `mco-umrb-seen-intro` so the intro modal stays
 shut, and waits on the same `#sr-cell-rows` readiness signal as the harness.
 That param, that localStorage key, and that table id are a contract — renaming
 any of them silently breaks the social card in production.

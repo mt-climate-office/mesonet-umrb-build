@@ -37,8 +37,14 @@ def main() -> None:
             color_scheme="light",  # match the forced ?theme=light
         )
         # Suppress the first-visit intro modal, which would otherwise cover the
-        # map. The key is the one app.js checks before auto-opening it.
-        ctx.add_init_script("localStorage.setItem('mco-status-seen-intro', '1')")
+        # map. The key is the one app.js hands MCO.initInfoModal's intro option
+        # (mco-umrb-seen-intro since kit 0.21.0; it was mco-status-seen-intro,
+        # status's key, which is also set so a run against a page that has not
+        # deployed yet still stays shut).
+        ctx.add_init_script(
+            "localStorage.setItem('mco-umrb-seen-intro', '1');"
+            "localStorage.setItem('mco-status-seen-intro', '1')"
+        )
         page = ctx.new_page()
 
         # Surface JS errors and console warnings for debugging.
@@ -47,8 +53,11 @@ def main() -> None:
 
         print(f"Loading {URL}?{QUERY} …")
         page.goto(f"{URL}?{QUERY}", wait_until="domcontentloaded", timeout=30_000)
+        # The stamp reads "Updated …" once the status has been read
+        # (MCO.formatUpdatedMT, kit 0.21.0); before that it says "Loading…".
         page.wait_for_function(
-            "() => document.querySelectorAll('#sr-cell-rows tr').length > 200",
+            "() => document.querySelectorAll('#sr-cell-rows tr').length > 200"
+            " && /^Updated /.test(document.getElementById('refresh-stamp')?.textContent || '')",
             timeout=60_000,
         )
         page.wait_for_load_state("networkidle", timeout=30_000)
