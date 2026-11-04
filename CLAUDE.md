@@ -14,11 +14,10 @@ https://github.com/mt-climate-office/mco-web-style — tokens only (no raw hexes
 a live region + sr-only table twin. To change shared styling, change the kit and
 bump the pinned version here; never patch a local copy.
 
-The cell-status colors are the kit's map category sets since 0.21.0
-(`MCO.palette.categorySet('umrb-public' | 'umrb-internal', theme)`, read in
-`VIEWS` in `app.js`), with their 0.9 fill opacity; change them in the kit, not
-here. App-local by deliberate kit decision (do NOT extract): the cell/station
-search combobox and the legend rendering. Every localStorage key is
+App-local by deliberate kit decision (do NOT extract): the cell-status ramp
+(`VIEWS` in `app.js`, with separate light/dark hexes per status — the one place
+raw hexes are allowed, as data-vis colors), the cell/station search combobox,
+and the legend rendering. Every localStorage key is
 `mco-umrb-*` (the page shares an origin with mesonet-status; `app.js` §
 Storage keys migrates the old `mco-status-*` ones).
 
