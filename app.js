@@ -180,45 +180,78 @@
     },
   });
 
+  // ── Storage keys ─────────────────────────────────────────────────────────
+  // This page shares an origin with mesonet-status (mesonet.climate.umt.edu,
+  // /umrb/ beside /status/), and until kit 0.21.0 it stored its settings
+  // under status's prefix. 'mco-status-seen-intro', '-labels' and '-legend'
+  // are keys status itself uses, so the two apps were reading each other's
+  // choices: seeing one intro suppressed the other. Every key is now
+  // 'mco-umrb-*' (kit rule: mco-<app>-*).
+  //   - Keys only this page wrote ('-stations', '-overlays') migrate: the
+  //     old value is read once, written under the new key, and removed.
+  //   - Keys status also owns ('-labels', '-legend') are copied once and
+  //     left in place: removing them would erase status's own setting.
+  //   - The intro flag is NOT carried over: the old one cannot tell which of
+  //     the two intros a visitor saw, so this page's intro shows once more
+  //     under its own key. Status's flag is left alone.
+  const KEY = {
+    intro:    'mco-umrb-seen-intro',
+    stations: 'mco-umrb-stations',
+    overlays: 'mco-umrb-overlays',
+    labels:   'mco-umrb-labels',
+    legend:   'mco-umrb-legend',
+    migrated: 'mco-umrb-keys-migrated',
+  };
+  function migrateKey(oldKey, newKey, removeOld) {
+    try {
+      const v = localStorage.getItem(oldKey);
+      if (v == null) return;
+      if (localStorage.getItem(newKey) == null) localStorage.setItem(newKey, v);
+      if (removeOld) localStorage.removeItem(oldKey);
+    } catch (e) { /* storage unavailable: nothing to migrate */ }
+  }
+  // Once per browser, so a status setting made later is never copied over.
+  if (MCO.lsGet(KEY.migrated) == null) {
+    migrateKey('mco-status-stations', KEY.stations, true);
+    migrateKey('mco-status-overlays', KEY.overlays, true);
+    migrateKey('mco-status-labels',   KEY.labels,   false);
+    migrateKey('mco-status-legend',   KEY.legend,   false);
+    MCO.lsSet(KEY.migrated, '1');
+  }
+
   // ── Info modal ───────────────────────────────────────────────────────────
-  // The kit owns backdrop-click, [data-close-modal] delegation, and
-  // opener-captured focus restore.
+  // The kit owns backdrop-click, [data-close-modal] delegation, focus on the
+  // close button and opener-captured focus restore — and, since 0.21.0, the
+  // first-visit intro: it opens once per key, marks it seen as it opens,
+  // and stands down on a deep link (skip) or once focus has left <body>.
   const btnInfo = document.getElementById('btn-info');
-  // On the landscape-phone rail the info button sits in the drawer: close the
-  // drawer before the dialog opens (capture, so it runs first), and when the
-  // dialog closes onto the now-hidden button, land on the rail's menu button.
+  // In the compact drawer (or the landscape rail's) the info button sits in
+  // the drawer: close it before the dialog opens (capture, so it runs
+  // first), and when the dialog closes onto the now-hidden button, land on
+  // ☰ instead.
   btnInfo.addEventListener('click', () => {
     if (rail.isOpen()) rail.close({ restoreFocus: false });
   }, true);
   infoModal.addEventListener('close', () => {
     setTimeout(() => {
       const a = document.activeElement;
-      if (rail.isRail() && (!a || a === document.body || !a.getClientRects().length)) {
+      if ((rail.isRail() || rail.isDrawerMode()) && (!a || a === document.body || !a.getClientRects().length)) {
         document.getElementById('btn-rail-menu').focus();
       }
     }, 0);
   });
-  const infoModalCtl = MCO.initInfoModal({ dialog: infoModal, trigger: btnInfo });
+  document.getElementById('info-credit').textContent =
+    MCO.credit({ source: 'Station status: MCO station registry' });
 
-  // Mark the intro seen AT OPEN, not on close. Someone who reads the modal and
-  // then navigates away without closing it has still seen it; the old
-  // close-handler version re-opened the intro for that visitor every single
-  // visit.
-  const markIntroSeen = () => MCO.lsSet('mco-status-seen-intro', '1');
-  btnInfo.addEventListener('click', markIntroSeen);
-
-  // First-visit auto-open: show the help on load so a new visitor knows what
-  // the colors mean. A deep link means the visitor was sent to something
-  // specific — don't bury it under the intro.
+  // A deep link means the visitor was sent to something specific — don't
+  // bury it under the intro.
   const _bootParams = MCO.urlParams();
   const _isDeepLink = ['cell', 'station', 'lng', 'lat', 'zoom']
     .some((k) => _bootParams.has(k));
-  if (!MCO.lsGet('mco-status-seen-intro') && !_isDeepLink) {
-    // Defer one tick so the page is rendered before the dialog steals focus.
-    setTimeout(() => {
-      if (!infoModal.open) { infoModalCtl.open(); markIntroSeen(); }
-    }, 350);
-  }
+  MCO.initInfoModal({
+    dialog: infoModal, trigger: btnInfo,
+    intro: { key: KEY.intro, skip: _isDeepLink },
+  });
 
   // ── State ────────────────────────────────────────────────────────────────
   let stations    = [];            // raw /stations/status/live response
@@ -345,23 +378,27 @@
   let stationsOn = (() => {
     const u = getLower('stations');
     if (u === 'on' || u === 'off') return u === 'on';
-    const saved = MCO.lsGet('mco-status-stations');
+    const saved = MCO.lsGet(KEY.stations);
     return saved == null ? true : saved === 'on';   // dots are on by default
   })();
   const activeOverlays = (() => {
     const tokens = splitTokens(urlParams.get('overlays'));
     if (tokens !== null) return new Set(tokens.filter(t => OVERLAY_BY_KEY.has(t)));
     try {
-      const saved = JSON.parse(MCO.lsGet('mco-status-overlays') || 'null');
+      const saved = JSON.parse(MCO.lsGet(KEY.overlays) || 'null');
       if (Array.isArray(saved)) return new Set(saved.filter(t => OVERLAY_BY_KEY.has(t)));
     } catch {}
     return new Set();
   })();
 
   let _selectedCell = _initCell;
-  // A station popup and a cell popup are mutually exclusive — only one popup
-  // exists at a time, and each owns its own URL parameter.
+  // A station detail and a cell detail are mutually exclusive — only one
+  // is open at a time, and each owns its own URL parameter.
   let _selectedStation = null;
+
+  // A station dot's category: its own registry status (a cell's category is
+  // its first-claiming station's, so a second station in a cell keeps its own).
+  function stationCat(s) { return categoryFor(s.status, activeView); }
 
   // Grid cells are labelled LETTER-NUMBER with no zero padding (H-8), but the
   // registry sometimes carries a padded form (H-08). Normalize to the map's
@@ -874,12 +911,12 @@
         chip.setAttribute('aria-pressed', on ? 'true' : 'false');
         if (e.key === 'stations') {
           stationsOn = on;
-          MCO.lsSet('mco-status-stations', on ? 'on' : 'off');
+          MCO.lsSet(KEY.stations, on ? 'on' : 'off');
           applyStationsVisibility();
         } else {
           if (on) { activeOverlays.add(e.key); loadOverlay(e.key); }
           else    { activeOverlays.delete(e.key); removeOverlayLayers(e.key); }
-          MCO.lsSet('mco-status-overlays', JSON.stringify([...activeOverlays]));
+          MCO.lsSet(KEY.overlays, JSON.stringify([...activeOverlays]));
         }
         pushState();
       });
@@ -1357,7 +1394,7 @@
   let labelsOn = (() => {
     const u = getLower('labels');
     if (u === 'on' || u === 'off') return u === 'on';
-    return MCO.lsGet('mco-status-labels') === 'on';
+    return MCO.lsGet(KEY.labels) === 'on';
   })();
   const labelsBtn = document.getElementById('btn-labels');
   labelsBtn.setAttribute('aria-pressed', labelsOn ? 'true' : 'false');
@@ -1369,7 +1406,7 @@
   labelsBtn.addEventListener('click', () => {
     labelsOn = !labelsOn;
     labelsBtn.setAttribute('aria-pressed', labelsOn ? 'true' : 'false');
-    MCO.lsSet('mco-status-labels', labelsOn ? 'on' : 'off');
+    MCO.lsSet(KEY.labels, labelsOn ? 'on' : 'off');
     applyLabelsVisibility();
     pushState();
   });
@@ -1384,7 +1421,7 @@
     // The kit persists '1'/'0'; this page shipped 'collapsed'/'expanded'.
     // Read both, or every returning visitor silently reverts to expanded
     // (MIGRATING § gotchas).
-    const saved = MCO.lsGet('mco-status-legend');
+    const saved = MCO.lsGet(KEY.legend);
     if (saved === 'collapsed' || saved === '1') return true;
     if (saved === 'expanded'  || saved === '0') return false;
     return MCO.viewport.isCompact();   // no preference: start collapsed on a phone
@@ -1397,7 +1434,7 @@
   MCO.initCollapsible({
     toggle: legendToggleBtn,
     body: document.getElementById('legend-body'),
-    storageKey: 'mco-status-legend',
+    storageKey: KEY.legend,
     startCollapsed: legendCollapsed,
     onChange: (collapsed) => {
       legendCollapsed = collapsed;
