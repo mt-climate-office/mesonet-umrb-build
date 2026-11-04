@@ -35,90 +35,47 @@
 
   const NULL_COLOR = '#9aa3b3';
 
-  // Cells are drawn as partially-transparent fills, so what you see is the
-  // category color composited over the basemap. Both numbers are needed in JS
-  // (not just CSS) so the legend can show the composited color rather than the
-  // raw one. The fills sit *beneath* the basemap's own label layers (see
+  // Flat stand-in for the CARTO Dark Matter / Positron land color: legend
+  // swatches show a category composited over it, as the cells appear. The
+  // fills sit *beneath* the basemap's own label layers (see
   // firstSymbolLayerId), which is what lets the alpha run this high without
   // burying the town and river names.
-  const FILL_OPACITY = { dark: 0.78, light: 0.78 };
-  // Flat stand-in for the CARTO Dark Matter / Positron land color.
   const BASEMAP_BG   = { dark: '#0e1116', light: '#fbfaf8' };
 
   // Cells whose station is installed and maintained by NDAWN rather than the
   // Mesonet. They carry no row in the station registry, so they are matched by
-  // cell ID and shown as operational with their own popup note.
+  // cell ID and shown as operational with their own detail note.
   const NDAWN_CELLS = new Set(['S-2', 'R-2', 'S-3', 'S-4']);
 
-  // ── The buildout ramp ────────────────────────────────────────────────────
-  // These categories are not seven unrelated things — they are one ordered
-  // progression, from a cell nobody has claimed to a station that is running:
+  // ── The buildout categories ──────────────────────────────────────────────
+  // One ordered progression, from a cell nobody has claimed to a station that
+  // is running:
   //
   //   available → pending 2027 → install 2026 → contracted
   //             → ground game → structure → operational
   //
-  // So they get one ramp rather than seven hand-picked hues: Fabio Crameri's
-  // `roma`, from the Scientific colour maps, sampled at seven even positions.
-  // The hues are the kit's roma — MCO.palette 'roma' (kit 0.12.0, Crameri v8,
-  // 11 stops) — read at t = stage/6, with "Build in progress" at t = 0.75
-  // (below). The hexes in VIEWS are derived OFFLINE, because the lightness
-  // remap below has no runtime equivalent in the kit; they stay hard-coded.
-  // Checked against MCO.palette.colorAt('roma', t) at those positions (kit
-  // 0.12.0): OKLab hue agrees within 1.3° for every stage in both themes,
-  // except 'Available cell' on light (3.1°, the deepest point of the remap).
-  // Only lightness (and with it chroma) moves.
-  // roma is perceptually uniform (adjacent steps differ by an equal, visible
-  // amount), readable in grayscale, and CVD-tested by construction — worst-case
-  // pairwise ΔE in CAM02-UCS is 14.6 (light) / 16.0 (dark) under simulated
-  // deuteranopia, protanopia and tritanopia. For comparison a rainbow scores
-  // ~3, and viridis over these same seven stages scored ~7.
-  //   Crameri, F. (2018). Scientific colour maps. doi:10.5281/zenodo.1243862
+  // Colors, labels, legend order and the cell fill opacity all come from the
+  // kit's map category sets (MCO.palette.categorySet, kit 0.21.0):
+  // 'umrb-public' and 'umrb-internal'. They replace the roma ramp this page
+  // sampled until 0.21.0, whose warm half (Install 2026, Pending 2027,
+  // Available cell) sat in the orange/brown band the tribal-lands fill keeps
+  // (owner decision, 2026-11). The kit's CI measures each set per theme: every
+  // cell at fillOpacity over land clears 3:1 against land, the tribal fill and
+  // the surfaces, and every pair stays apart under protan, deutan and tritan
+  // simulation. Same vocabulary as status and maintenance: green is the good
+  // end (Operational), rose the bad end (Available cell). High contrast uses
+  // the dark basemap, so categorySet hands it the dark values.
   //
-  // roma diverges from dark red-brown through a pale middle to deep blue, which
-  // suits the data: the two ends are the terminal states (nobody has claimed
-  // this cell / a station is running) and the pale, most salient middle is the
-  // work actually in flight. Running it in this direction also keeps the old
-  // Leaflet map's strongest cue — an unclaimed cell still reads red.
-  //
-  // A diverging ramp is the one shape that fights a two-theme map: its pale
-  // middle sinks into Positron and its dark ends sink into Dark Matter. Sliding
-  // the sampled span per theme (what a sequential ramp would do) cannot fix
-  // that, so instead both themes take the SAME seven hues with their CAM02-UCS
-  // lightness remapped into a band that clears a contrast floor against that
-  // theme's basemap. Hue, chroma and the diverging shape survive; only the
-  // lightness envelope moves.
-  //
-  //   light: J' ∈ [20, 76]      dark: J' ∈ [34, 90]
-  //
-  // The public view merges the two construction milestones into one bucket, so
-  // its "Build in progress" is sampled at the MIDPOINT of the two internal
-  // stages it covers, then put through the same lightness remap. That is what
-  // keeps the two views legible against each other: the public band sits
-  // exactly where its two halves came from, rather than being a seventh
-  // unrelated color.
+  // The public view merges the two construction milestones into one
+  // "Build in progress" bucket; the internal view keeps them apart.
   const VIEWS = {
-    public: {
-      cats: [
-        { key: 'active',       light: '#001e8d', dark: '#1b47aa', label: 'Operational' },
-        { key: 'building',     light: '#0481ab', dark: '#44a5d0', label: 'Build in progress' },
-        { key: 'contracted',   light: '#97c09b', dark: '#c0ebc4', label: 'Installation pending' },
-        { key: 'candidate-26', light: '#a69338', dark: '#ceb95a', label: 'Install 2026' },
-        { key: 'candidate-27', light: '#8b5308', dark: '#b2742a', label: 'Pending 2027' },
-        { key: 'unassigned',   light: '#690500', dark: '#95290d', label: 'Available cell' },
-      ],
-    },
-    internal: {
-      cats: [
-        { key: 'active',       light: '#001e8d', dark: '#1b47aa', label: 'Operational' },
-        { key: 'structures',   light: '#0065a1', dark: '#3887c5', label: 'Station structure complete' },
-        { key: 'ground',       light: '#37a0b2', dark: '#64c7d9', label: 'Ground game complete' },
-        { key: 'contracted',   light: '#97c09b', dark: '#c0ebc4', label: 'Installation pending' },
-        { key: 'candidate-26', light: '#a69338', dark: '#ceb95a', label: 'Install 2026' },
-        { key: 'candidate-27', light: '#8b5308', dark: '#b2742a', label: 'Pending 2027' },
-        { key: 'unassigned',   light: '#690500', dark: '#95290d', label: 'Available cell' },
-      ],
-    },
+    public:   { set: 'umrb-public' },
+    internal: { set: 'umrb-internal' },
   };
+  // Keys and labels are the same in every theme; read them once.
+  for (const v of Object.values(VIEWS)) {
+    v.cats = MCO.palette.categorySet(v.set, 'dark').map(({ key, label }) => ({ key, label }));
+  }
   const VIEW_NAMES = Object.keys(VIEWS);
 
   // Registry `status` → category key. Everything not listed (inactive,
@@ -345,13 +302,15 @@
     const c = catByKey(key);
     return c ? c.label : key;
   }
-  // Every category carries both theme variants — see the VIEWS comment for why
-  // the two themes sample different spans of the same ramp.
+  // The active view's set for the current theme (light, or the dark values
+  // for dark and high contrast), from the kit.
+  function catSet() { return MCO.palette.categorySet(VIEWS[activeView].set, MCO.getTheme()); }
   function catColor(key) {
-    const c = catByKey(key);
-    if (!c) return NULL_COLOR;
-    return isDark() ? c.dark : c.light;
+    const c = catSet().find(r => r.key === key);
+    return c ? c.color : NULL_COLOR;
   }
+  // The set's own fill opacity (0.9): the alpha its contrast was measured at.
+  function fillOpacity() { return catSet().fillOpacity; }
 
   // ── Color math (legend swatches) ─────────────────────────────────────────
   const parseHex = (h) => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
@@ -365,19 +324,17 @@
   // the chip reads as the same color as the cells it controls.
   function swatchColor(key) {
     const theme = isDark() ? 'dark' : 'light';
-    const a  = FILL_OPACITY[theme];
+    const a  = fillOpacity();
     const bg = parseHex(BASEMAP_BG[theme]);
     const c  = parseHex(catColor(key));
     return toHex(c.map((v, i) => v * a + bg[i] * (1 - a)));
   }
   // Pills are solid, so their label has to flip between light and dark text
   // depending on the fill. Picking whichever of white / black has more
-  // contrast clears WCAG 1.4.3 AA for every fill in both views and every
-  // theme (worst case 4.73:1). The dark option used to be #1a1a2e, which
-  // left three mid-lightness fills under 4.5:1 — "Pending 2027" on dark
-  // (#b2742a, 4.41:1), "Build in progress" on light (#0481ab, 4.44:1) and
-  // "Station structure complete" on dark (#3887c5, 4.42:1). Found by axe
-  // on the orphan-station popup; no earlier scan opened a popup.
+  // contrast clears WCAG 1.4.3 AA on any fill: the better of the two is
+  // always at least 4.58:1. (A near-black #1a1a2e option used to leave
+  // mid-lightness fills under 4.5:1; found by axe on the orphan-station
+  // detail.)
   function readableOn(hex) {
     const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
     const l = relLum(parseHex(hex));
@@ -429,7 +386,7 @@
     if (!_stateFC) preloadOverlay('state', STATE_URL, fc => _stateFC = fc);
 
     // Themed live-shaded topography, underneath everything we draw. The UMRB
-    // cells run at 0.78 alpha, so relief reads through the fills and across the
+    // cells run at the category set's 0.9 alpha, so relief reads through the fills and across the
     // gaps between them — which is most of what orients an eastern-Montana
     // extent that has few basemap labels.
     MCO.map.addHillshade(map);
@@ -505,9 +462,7 @@
   function cellFillPaint() {
     return {
       'fill-color': paintColorForView(),
-      // Slightly hotter in dark mode: the same alpha over a dark basemap reads
-      // considerably duller than it does over Positron.
-      'fill-opacity': FILL_OPACITY[isDark() ? 'dark' : 'light'],
+      'fill-opacity': fillOpacity(),
     };
   }
   function cellLinePaint() {
