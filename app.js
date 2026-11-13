@@ -1108,9 +1108,10 @@
     },
   });
 
-  // The compact bar (kit 0.21.0) and the landscape rail (0.10.0): the bar's
-  // contents move into a drawer — a right drawer under a one-row bar on a
-  // phone, a drawer beside the 56px rail on a landscape phone. The drawer
+  // The compact bar (kit 0.21.0) and the landscape rail (0.10.0; at the
+  // right edge since 1.0.0): the bar's contents move into a drawer — a
+  // right drawer under a one-row bar on a phone, a drawer opening from the
+  // right beside the 56px rail on a landscape phone. The drawer
   // contract (focus in, everything else inert, Esc / scrim / ☰ close, focus
   // back to the button that opened it) is the kit's. The search button
   // opens the drawer on the field. On a compact bar ≤640px is always rail
@@ -1123,6 +1124,13 @@
     scrim:  document.getElementById('rail-scrim'),
     search: { toggle: document.getElementById('btn-search-toggle'), input: searchInput },
   });
+
+  // The legend on a phone (kit 1.0.0, Kyle 2026-11-12): on compact the
+  // floating panel moves into a "Legend" group at the end of the ☰ drawer
+  // (its rows, toggles and collapse come with it) and a small Legend button
+  // takes its bottom-left corner on the map, opening the drawer at the
+  // group. Above compact it floats as before.
+  MCO.initLegendDrawer({ panel: document.getElementById('legend'), rail });
 
   // With ?kbd=off the '/' shortcut is disabled, so advertising it would be a
   // lie. (The kit already hides this hint inside the compact overlay bar.)
@@ -1247,24 +1255,23 @@
     }, cat, notes);
   }
 
-  // ── Detail: the kit's sheet at every width ──────────────────────────────
+  // ── Detail: the kit's panel at every width ──────────────────────────────
   // One selection (a cell or a station, each with its own URL parameter) and
-  // one surface showing it: MCO.initSheet, docked at the end edge on desktop
-  // and a bottom sheet on compact (kit 0.21.0; the anchored MapLibre popup
-  // this page showed on desktop retired). The body is popupContent(). On
-  // compact it opens at peek (title, sub, status pill), drags or steps (the
-  // grip) to full, and closes on ×, Esc or a drag down; the map stays
-  // usable at peek.
+  // one surface showing it: MCO.initSheet, docked at the end edge with the
+  // map live above compact (kit 0.21.0; the anchored MapLibre popup this
+  // page showed on desktop retired), and on compact one full-height state
+  // under the bar, left of the rail in landscape (kit 1.0.0: no peek, grip
+  // or drag). The bar stays live, so search swaps the detail with it open.
+  // The body is popupContent(). It closes on ×, Esc or Back.
   //
   // History (HOUSE-STYLE §4): the first open from "no detail" pushes an
   // entry, so Back closes it; switching cell or station while it is open
   // replaces. Closing a pushed detail steps Back off its own entry rather
   // than leaving a dead one that would reopen it. A deep link replaces: its
   // entry is the page's own.
-  // The bar's height as --chrome-h, which the kit's phone bottom sheet keeps
-  // clear of (its full-detent max-height). The end-docked sheet measures the
-  // bar itself since kit 0.21.1.
-  MCO.metrics.observe('--chrome-h', document.getElementById('navbar'));
+  // The panel's top is the kit's (--sheet-top, measured from the bar on
+  // open and on resize, 0 beside the rail) at every width since kit 1.0.0,
+  // so this page no longer publishes --chrome-h for it.
   const detailSheetEl = document.getElementById('detail-sheet');
   const sheetTitleEl  = document.getElementById('detail-sheet-title');
   const sheetBodyEl   = detailSheetEl.querySelector('.mco-sheet-body');
@@ -1285,15 +1292,12 @@
     if (_selectedStation) return stationPopupContent(_selectedStation);
     return null;
   }
-  // The sheet has its own title element, so the body's title moves there;
-  // the status pill marks the peek height.
+  // The sheet has its own title element, so the body's title moves there.
   function fillSheet(frag) {
     const root = frag.querySelector('.mco-popup');
     const t = root.querySelector('.mco-popup-title');
     sheetTitleEl.textContent = t ? t.textContent : '';
     if (t) t.remove();
-    const pill = root.querySelector('.pop-pill');
-    if (pill) pill.dataset.peek = '';
     sheetBodyEl.replaceChildren(frag);
   }
   // Re-render whatever is open (a theme switch recolors the pill).
@@ -1309,7 +1313,7 @@
     const content = detailContent();
     if (!content) return;
     fillSheet(content);
-    sheet.open('peek', { opener: document.activeElement });
+    sheet.open({ opener: document.activeElement });
     if (url === 'none') return;
     if (url === 'auto' && !(history.state && history.state.mcoDetail)) pushState({ push: true });
     else pushState();
