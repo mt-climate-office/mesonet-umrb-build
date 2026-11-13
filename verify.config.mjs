@@ -119,5 +119,36 @@ export default {
     const k = await open('?kbd=off');
     check('?kbd=off sticks in the URL', await k.page.evaluate(() => /kbd=off/.test(location.search)));
     await k.close();
+    // No horizontal overflow at 320px (touch): the page must not scroll
+    // sideways (WebKit) or widen its layout viewport past the device width
+    // (Chromium mobile grows innerWidth instead of scrolling), so both are
+    // compared against 320. Checked with the intro open, the drawer open,
+    // the legend open, and a station sheet open. The sr-only twin <table>
+    // once carried .sr-only itself and laid out at ~348px.
+    const W = 320;
+    const vp = { viewport: { width: W, height: 568, touch: true } };
+    const wide = (p) => p.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: innerWidth }));
+    const fits = (m) => m.sw <= W && m.iw === W;
+    const rows = () => document.querySelectorAll('#sr-cell-rows tr').length >= 200;
+    const o = await open('', { ...vp, ready: rows });
+    let m = await wide(o.page);
+    check('320px: no horizontal overflow (default)', fits(m), JSON.stringify(m));
+    await o.page.click('#btn-rail-menu');
+    await o.page.waitForFunction(() => document.getElementById('nav-drawer').classList.contains('is-open'), null, { timeout: 5000 });
+    m = await wide(o.page);
+    check('320px: no horizontal overflow (drawer open)', fits(m), JSON.stringify(m));
+    await o.close();
+    const intro = await open('', { ...vp, storage: {}, ready: () => !!document.querySelector('dialog[open]') && document.querySelectorAll('#sr-cell-rows tr').length >= 200 });
+    m = await wide(intro.page);
+    check('320px: no horizontal overflow (intro open)', fits(m), JSON.stringify(m));
+    await intro.close();
+    const lg = await open('?legend=open', { ...vp, ready: () => document.querySelector('#legend .mco-panel-toggle')?.getAttribute('aria-expanded') === 'true' && document.querySelectorAll('#sr-cell-rows tr').length >= 200 });
+    m = await wide(lg.page);
+    check('320px: no horizontal overflow (legend open)', fits(m), JSON.stringify(m));
+    await lg.close();
+    const st = await open('?station=aceabsar', { ...vp, ready: sheetOpen });
+    m = await wide(st.page);
+    check('320px: no horizontal overflow (station sheet)', fits(m), JSON.stringify(m));
+    await st.close();
   },
 };

@@ -447,14 +447,20 @@
 
 <!-- Screen-reader twin of the map canvas: one row per grid cell, rebuilt on
      every repaint. WebGL output is invisible to assistive tech, so this table
-     is the only way the cell statuses are readable without sight. -->
-<table id="sr-cell-table" class="sr-only">
-  <caption>UMRB grid cells and their Mesonet buildout status</caption>
-  <thead>
-    <tr><th scope="col">Cell</th><th scope="col">Status</th><th scope="col">Station</th></tr>
-  </thead>
-  <tbody id="sr-cell-rows"></tbody>
-</table>
+     is the only way the cell statuses are readable without sight.
+     .sr-only goes on a wrapper div, never on the <table> (MCO.srTable does
+     the same): a table treats width: 1px as a minimum and lays out at its
+     nowrap content width, ~348px, which scrolled the page sideways at 320px
+     in WebKit and widened Chromium's mobile layout viewport to 347px. -->
+<div class="sr-only">
+  <table id="sr-cell-table">
+    <caption>UMRB grid cells and their Mesonet buildout status</caption>
+    <thead>
+      <tr><th scope="col">Cell</th><th scope="col">Status</th><th scope="col">Station</th></tr>
+    </thead>
+    <tbody id="sr-cell-rows"></tbody>
+  </table>
+</div>
 </main>
 
 <!-- Detail sheet (MCO.initSheet): the cell/station detail at every width —
