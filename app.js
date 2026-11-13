@@ -269,12 +269,11 @@
   // and stands down on a deep link (skip) or once focus has left <body>.
   const btnInfo = document.getElementById('btn-info');
   // In the compact drawer (or the landscape rail's) the info button sits in
-  // the drawer: close it before the dialog opens (capture, so it runs
-  // first), and when the dialog closes onto the now-hidden button, land on
-  // ☰ instead.
-  btnInfo.addEventListener('click', () => {
-    if (rail.isOpen()) rail.close({ restoreFocus: false });
-  }, true);
+  // the drawer. The drawer stays open under the dialog: since kit 1.0.0 a
+  // modal dialog opened from it is live, and closing it returns focus to
+  // the button in the drawer. When the dialog closes with no visible
+  // opener (the first-visit intro on a phone opens with focus on <body>),
+  // land on ☰ rather than <body>.
   infoModal.addEventListener('close', () => {
     setTimeout(() => {
       const a = document.activeElement;
