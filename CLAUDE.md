@@ -65,7 +65,8 @@ any of them silently breaks the social card in production.
 There is no CI for the page. Before any push, run the manual gates from
 mco-web-style `MIGRATING.md` § "Verification recipe": `node --check app.js`,
 `npx html-validate@9 index.html`, and the app's `consumer-verify.mjs` harness
-(untracked; install `playwright` + `@axe-core/playwright` with `--no-save`).
+(tracked since kit 1.0.0, after it went stale untracked; install `playwright` +
+`@axe-core/playwright` with `--no-save`, never a committed `package.json`).
 
 The harness serves the repo root on a local port and intercepts the API URL in
 the browser (`ctx.route`) to answer it from `fixtures/status.json` — also
