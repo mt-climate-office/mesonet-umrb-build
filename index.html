@@ -39,11 +39,11 @@
   <!-- Favicons / app icons: hot-linked from the pinned kit tag (kit 0.9.0+,
        decided 2026-10-08) so they version with the kit and cannot drift. The
        navbar logo stays vendored (assets/mco-logo.png). -->
-  <link rel="icon" type="image/png" sizes="32x32" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/assets/favicon-32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/assets/favicon-16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/assets/apple-touch-icon.png">
-  <link rel="icon" type="image/png" sizes="192x192" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/assets/icon-192.png">
-  <link rel="icon" type="image/png" sizes="512x512" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/assets/icon-512.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/assets/favicon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/assets/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/assets/icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/assets/icon-512.png">
 
   <!-- Open Graph (Facebook, LinkedIn, Slack, Discord, iMessage, etc.).
        The card is NOT the kit's generic og-card: it is this map, screenshotted
@@ -70,7 +70,7 @@
 
   <!-- mco-web-style · anti-flash theme boot — copied byte for byte from the
        kit's snippets/anti-flash.html (0.19.0, the data-theme-default
-       version; unchanged through 0.21.0). Kept INLINE and ahead of every
+       version; unchanged through 1.0.0). Kept INLINE and ahead of every
        stylesheet on purpose: from a CDN it would land after first paint and
        reintroduce the flash it exists to prevent.
        Precedence: ?theme= → localStorage['mco-theme'] → <html data-theme-default> → OS preference. The key
@@ -109,8 +109,8 @@
   <!-- House fonts: kit-hosted, declared in mco-theme.css. Preloaded so the
        first frame is already in Outfit — no system-font flash. Same @version
        as the theme CSS; crossorigin is required on font preloads. -->
-  <link rel="preload" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/fonts/outfit-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="preload" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/fonts/space-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/fonts/outfit-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/fonts/space-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
 
   <!-- MapLibre GL 6.11.2 (kit 0.8.0+; 5.18.0 carried the critical
        attribution-control XSS GHSA-jrc7-96c5-q579). 6.x is ES-modules only:
@@ -130,11 +130,11 @@
         integrity="sha384-ntw3zEt6rcVML7jDK0ULmHa5hxLB23afsPqzqfY+gLgMfAkbFCnCgPpkZvV5mmZX"
         crossorigin="anonymous">
 
-  <!-- mco-web-style @0.21.2 — tokens, reset, a11y utilities, navbar/panel/toast/
+  <!-- mco-web-style @1.0.0 — tokens, reset, a11y utilities, navbar/panel/toast/
        tooltip/modal shells, MapLibre control polish. Everything below in
        <style> is what remains app-specific after the kit took the rest. -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/theme/mco-theme.css"
-        integrity="sha384-6b+8YTXHtiLQOLwPSXvqmgnA4QlUZ87oGCr9kwLwAHCTV+oDPCkM0IK6mve/4BeY"
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/theme/mco-theme.css"
+        integrity="sha384-sYr4fDiezV2VCn92FyWqmM9kKbbJPMUCqf7xIkQqLyFlSbMmWCTGdAzNPlm6cJ65"
         crossorigin="anonymous">
 
   <style>
@@ -313,10 +313,13 @@
      logo badge at the left edge, the search button, ☰ at the right edge —
      and .mco-nav-drawer (brand, search field, chips, stamp, buttons) opens
      as a right drawer under it. On a landscape phone the same .mco-rail
-     children make the 56px left rail (kit 0.10.0). Everywhere else
+     children make the 56px rail at the right edge (kit 1.0.0; the left
+     until then), the drawer opening beside it. Everywhere else
      .mco-nav-drawer is display:contents, so the desktop bar is unchanged.
-     No hot controls: this map has no control a visitor repeats on the map
-     (no date, no mode); search is the primary action. -->
+     No hot controls and no bottom control bar: this map has no control a
+     visitor repeats on the map (no date, no mode, no time controls);
+     search is the primary action. On a phone the legend joins the drawer
+     as a "Legend" group (MCO.initLegendDrawer, app.js). -->
 <header id="navbar" class="mco-navbar" data-rail="compact">
   <a href="https://climate.umt.edu" target="_blank" rel="noopener noreferrer"
      class="logo-link" aria-label="Montana Climate Office">
@@ -463,14 +466,15 @@
 </div>
 </main>
 
-<!-- Detail sheet (MCO.initSheet): the cell/station detail at every width —
-     docked at the end edge on desktop, a bottom sheet on compact (kit 0.21.0
-     retired the anchored map popup). Its body is MCO.map.popupContent();
-     app.js fills the title and body. Not a dialog: it is not modal at peek,
-     and the kit makes the rest inert only at full on compact. -->
+<!-- Detail panel (MCO.initSheet): the cell/station detail at every width —
+     docked at the end edge with the map live above compact, and on a phone
+     one full-height state under the bar (kit 1.0.0: no peek, no grip, no
+     drag), the bar staying live. Its body is MCO.map.popupContent(); app.js
+     fills the title and body. Not a dialog: the kit makes the rest of the
+     page inert only on compact. The × is the only close on a touch screen
+     and the kit sizes it 44px at every width. -->
 <section class="mco-sheet" id="detail-sheet" aria-labelledby="detail-sheet-title" data-state="closed" hidden>
   <div class="mco-sheet-head">
-    <button type="button" class="mco-sheet-grip" aria-label="Expand details" aria-expanded="false"></button>
     <h2 class="mco-sheet-title" id="detail-sheet-title" tabindex="-1">Details</h2>
     <button type="button" class="modal-close" data-close-sheet aria-label="Close details">×</button>
   </div>
@@ -504,10 +508,10 @@
         <li><strong>Search</strong> — press <kbd>/</kbd> to jump there; <kbd>↑</kbd>/<kbd>↓</kbd> + <kbd>Enter</kbd> to pick.</li>
         <li><strong>Legend</strong> — click a row to hide a status; double-click (or <kbd>Shift</kbd>+<kbd>Enter</kbd>) to isolate it.</li>
         <li><strong>Layers</strong> — chips toggle station dots and the county / watershed / tribal-land reference overlays.</li>
-        <li><strong>Hover</strong> a cell for its status; <strong>click</strong> it, or a station dot, to open its details beside the map, with a dashboard link.</li>
+        <li><strong>Hover</strong> a cell for its status; <strong>click</strong> it, or a station dot, to open its details beside the map (full screen on a phone), with a dashboard link.</li>
         <li>The tag button toggles <strong>grid cell labels</strong>; the theme button steps dark → light → high contrast.</li>
         <li><kbd>Esc</kbd>, × or the browser's <strong>Back</strong> button closes the details.</li>
-        <li>On a phone, <strong>☰</strong> opens the menu with search, the layers and the buttons.</li>
+        <li>On a phone, <strong>☰</strong> opens the menu with search, the layers, the buttons and the legend; the <strong>Legend</strong> button on the map opens it at the legend.</li>
         <li>Single-key shortcuts get in the way of speech input: add <code>?kbd=off</code> to the URL to turn <kbd>/</kbd> off.</li>
       </ul>
     </div>
@@ -532,20 +536,20 @@
         integrity="sha384-0zsXXGoRDkeFkSmQMO6+loKfQ+SOqY302gh79NpNuSka2VyJzFEpQJggXVHixQ2h"
         crossorigin="anonymous"></script>
 
-<!-- mco-web-style @0.21.2 — classic scripts, so they must precede app.js.
+<!-- mco-web-style @1.0.0 — classic scripts, so they must precede app.js.
      MapLibre is not among them: mco-map.js imports it on demand
      (MCO.map.loadMapLibre, pinned by the import map in <head>). SRI hashes are
      the kit README's table for this exact tag; bumping @version without
      recomputing them hard-fails in the browser, which is the point. -->
-<script src="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/core/mco-core.js"
-        integrity="sha384-xNdr9/kMYOXBLa6aHuU637Nln0S73l6QjvB9Ld7vqCvwcqZ6wzs69YziKejo8M3w"
+<script src="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/core/mco-core.js"
+        integrity="sha384-D7xlWfDfWcrBYM29SxNSZ9sjoFbu9VmboXzztcMMqsSm10bhGta1w4i7Q/mveU3A"
         crossorigin="anonymous"></script>
 <!-- mco-palette.js before mco-map.js: markerPaint() reads its network registry. -->
-<script src="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/palette/mco-palette.js"
+<script src="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/palette/mco-palette.js"
         integrity="sha384-bMyfpU5iEKAQiHDJZLqmCMt3sTGm+HBi2GIY7I9xLyV+JYrbGgHOX9+/XVXy8CYV"
         crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@0.21.2/map/mco-map.js"
-        integrity="sha384-8ZLN6Xhnts1kIMbDa9M+H05sYgu770WLohBOrch1nTafMd+HEM7PlrP0e4fCoRb8"
+<script src="https://cdn.jsdelivr.net/gh/mt-climate-office/mco-web-style@1.0.0/map/mco-map.js"
+        integrity="sha384-eWrG2T3udOw4ET+hy7Sq0BR/c4jCKD2+Cy4TEV2m4Dd6BL5VXGZXS2n8B8y+8v4z"
         crossorigin="anonymous"></script>
 
 <script src="app.js"></script>

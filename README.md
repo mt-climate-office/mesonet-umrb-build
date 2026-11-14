@@ -18,9 +18,9 @@ Two views:
 Other features:
 
 - **Search box** for cells and stations with a themed dropdown, keyboard navigation (`↑` `↓` `Enter`), and a `/` global shortcut (`?kbd=off` disables it).
-- **Interactive legend** — click a row to hide that status; double-click (or <kbd>Shift</kbd>+<kbd>Enter</kbd>) to isolate it.
+- **Interactive legend** — click a row to hide that status; double-click (or <kbd>Shift</kbd>+<kbd>Enter</kbd>) to isolate it. On a phone it sits in the ☰ menu, and the **Legend** button on the map opens it there.
 - **Layer chips** toggle station dots and the county, watershed (HUC6), and tribal-land reference overlays, streamed as FlatGeobuf from the MCO data service.
-- **Hover** a cell for its status; **click** for station details and a dashboard link, in a side sheet (a bottom sheet on a phone); Back closes it. `?station=` opens the station even when its `ace_grid` names no drawn cell.
+- **Hover** a cell for its status; **click** for station details and a dashboard link, in a side panel (full height under the bar on a phone); ×, Esc or Back closes it. `?station=` opens the station even when its `ace_grid` names no drawn cell.
 - **Toggleable grid-cell labels**; hillshade relief; Montana outline.
 - **Light / dark / high-contrast** themes on neutral [CARTO](https://carto.com/basemaps) basemaps; honors `prefers-reduced-motion` and `prefers-color-scheme`.
 - Screen-reader table twin of the map (one row per cell) and a first-visit help dialog.
